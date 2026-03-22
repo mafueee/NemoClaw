@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from "vitest";
+const { describe, it } = require("node:test");
+const assert = require("node:assert/strict");
 
-import {
+const {
   CLOUD_MODEL_OPTIONS,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_ROUTE_CREDENTIAL_ENV,
@@ -12,22 +13,25 @@ import {
   MANAGED_PROVIDER_ID,
   getOpenClawPrimaryModel,
   getProviderSelectionConfig,
-} from "../bin/lib/inference-config";
+} = require("../bin/lib/inference-config");
 
 describe("inference selection config", () => {
   it("exposes the curated cloud model picker options", () => {
-    expect(CLOUD_MODEL_OPTIONS.map((option) => option.id)).toEqual([
-      "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
-      "z-ai/glm5",
-      "minimaxai/minimax-m2.5",
-      "qwen/qwen3.5-397b-a17b",
-      "openai/gpt-oss-120b",
-    ]);
+    assert.deepEqual(
+      CLOUD_MODEL_OPTIONS.map((option) => option.id),
+      [
+        "nvidia/nemotron-3-super-120b-a12b",
+        "moonshotai/kimi-k2.5",
+        "z-ai/glm5",
+        "minimaxai/minimax-m2.5",
+        "qwen/qwen3.5-397b-a17b",
+        "openai/gpt-oss-120b",
+      ],
+    );
   });
 
   it("maps ollama-local to the sandbox inference route and default model", () => {
-    expect(getProviderSelectionConfig("ollama-local")).toEqual({
+    assert.deepEqual(getProviderSelectionConfig("ollama-local"), {
       endpointType: "custom",
       endpointUrl: INFERENCE_ROUTE_URL,
       ncpPartner: null,
@@ -39,18 +43,16 @@ describe("inference selection config", () => {
     });
   });
 
-  it("maps nvidia-nim to the sandbox inference route", () => {
-    expect(
-      getProviderSelectionConfig("nvidia-nim", "nvidia/nemotron-3-super-120b-a12b")
-    ).toEqual({
+  it("maps nvidia-prod to the sandbox inference route", () => {
+    assert.deepEqual(getProviderSelectionConfig("nvidia-prod", "nvidia/nemotron-3-super-120b-a12b"), {
       endpointType: "custom",
       endpointUrl: INFERENCE_ROUTE_URL,
       ncpPartner: null,
       model: "nvidia/nemotron-3-super-120b-a12b",
       profile: DEFAULT_ROUTE_PROFILE,
       credentialEnv: DEFAULT_ROUTE_CREDENTIAL_ENV,
-      provider: "nvidia-nim",
-      providerLabel: "NVIDIA Endpoint API",
+      provider: "nvidia-prod",
+      providerLabel: "NVIDIA Endpoints",
     });
   });
 
@@ -68,6 +70,9 @@ describe("inference selection config", () => {
   });
 
   it("builds a qualified OpenClaw primary model for ollama-local", () => {
-    expect(getOpenClawPrimaryModel("ollama-local", "nemotron-3-nano:30b")).toBe(`${MANAGED_PROVIDER_ID}/nemotron-3-nano:30b`);
+    assert.equal(
+      getOpenClawPrimaryModel("ollama-local", "nemotron-3-nano:30b"),
+      `${MANAGED_PROVIDER_ID}/nemotron-3-nano:30b`,
+    );
   });
 });
