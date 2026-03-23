@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { describe, it } = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+import { describe, it } from "vitest";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 describe("onboard provider selection UX", () => {
   it("prompts explicitly instead of silently auto-selecting detected Ollama", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-selection-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "selection-check.js");
@@ -106,7 +106,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("accepts a manually entered NVIDIA Endpoints model after validating it against /models", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-build-model-selection-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "build-model-selection-check.js");
@@ -199,7 +199,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts for a manual NVIDIA Endpoints model when /models validation rejects it", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-build-model-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "build-model-retry-check.js");
@@ -289,7 +289,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("shows curated Gemini models and supports Other for manual entry", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-gemini-selection-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "gemini-selection-check.js");
@@ -382,7 +382,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("warms and validates Ollama via localhost before moving on", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-validation-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "ollama-validation-check.js");
@@ -476,7 +476,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("offers starter Ollama models when none are installed and pulls the selected model", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-bootstrap-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "ollama-bootstrap-check.js");
@@ -578,7 +578,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts inside the Ollama model flow when a pull fails", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "ollama-retry-check.js");
@@ -683,7 +683,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts for an OpenAI Other model when /models validation rejects it", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-openai-model-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "openai-model-retry-check.js");
@@ -770,7 +770,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts for an Anthropic Other model when /v1/models validation rejects it", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-anthropic-model-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "anthropic-model-retry-check.js");
@@ -851,7 +851,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("returns to provider selection when Anthropic live validation fails interactively", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-anthropic-validation-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "anthropic-validation-retry-check.js");
@@ -943,7 +943,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("supports Other Anthropic-compatible endpoint with live validation", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-anthropic-compatible-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "anthropic-compatible-check.js");
@@ -1028,7 +1028,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts only for model name when Other OpenAI-compatible endpoint validation fails", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-custom-openai-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "custom-openai-retry-check.js");
@@ -1121,7 +1121,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("reprompts only for model name when Other Anthropic-compatible endpoint validation fails", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-custom-anthropic-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "custom-anthropic-retry-check.js");
@@ -1214,7 +1214,7 @@ const { setupNim } = require(${onboardPath});
   });
 
   it("returns to provider selection when endpoint validation fails interactively", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-selection-retry-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "selection-retry-check.js");

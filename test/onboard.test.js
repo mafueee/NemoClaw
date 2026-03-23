@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { describe, it } = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+import { describe, it } from "vitest";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
+const require = createRequire(import.meta.url);
 const {
   buildSandboxConfigSyncScript,
   createSandbox,
@@ -172,7 +174,7 @@ describe("onboard helpers", () => {
   });
 
   it("passes credential names to openshell without embedding secret values in argv", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-inference-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "setup-inference-check.js");
@@ -242,7 +244,7 @@ const { setupInference } = require(${onboardPath});
   });
 
   it("uses native Anthropic provider creation without embedding the secret in argv", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-anthropic-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "setup-anthropic-check.js");
@@ -312,7 +314,7 @@ const { setupInference } = require(${onboardPath});
   });
 
   it("updates OpenAI-compatible providers without passing an unsupported --type flag", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-openai-update-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "setup-openai-update-check.js");
@@ -384,7 +386,7 @@ const { setupInference } = require(${onboardPath});
   });
 
   it("drops stale local sandbox registry entries when the live sandbox is gone", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-stale-sandbox-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "stale-sandbox-check.js");
@@ -426,7 +428,7 @@ console.log(JSON.stringify({ liveExists, sandbox: registry.getSandbox("my-assist
   });
 
   it("builds the sandbox without uploading an external OpenClaw config file", async () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-create-sandbox-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "create-sandbox-check.js");
@@ -495,7 +497,7 @@ const { createSandbox } = require(${onboardPath});
   });
 
   it("accepts gateway inference when system inference is separately not configured", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-inference-get-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "inference-get-check.js");
@@ -563,7 +565,7 @@ const { setupInference } = require(${onboardPath});
   });
 
   it("accepts gateway inference output that omits the Route line", () => {
-    const repoRoot = path.join(__dirname, "..");
+    const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-inference-route-"));
     const fakeBin = path.join(tmpDir, "bin");
     const scriptPath = path.join(tmpDir, "inference-route-check.js");
