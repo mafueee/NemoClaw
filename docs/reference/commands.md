@@ -22,6 +22,12 @@ status: published
 
 The `nemoclaw` CLI is the primary interface for managing NemoClaw sandboxes. It is installed when you run `npm install -g nemoclaw`.
 
+Every command supports `--help` to print usage, options, and examples:
+
+```console
+$ nemoclaw <command> --help
+```
+
 ### `/nemoclaw` Slash Command
 
 The `/nemoclaw` slash command is available inside the OpenClaw chat interface for quick actions:
@@ -41,8 +47,12 @@ The wizard creates an OpenShell gateway, registers inference providers, builds t
 Use this command for new installs and for recreating a sandbox after changes to policy or configuration.
 
 ```console
-$ nemoclaw onboard
+$ nemoclaw onboard [--non-interactive]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--non-interactive` | Skip interactive prompts (use environment variables and defaults) |
 
 The first run prompts for your NVIDIA API key and saves it to `~/.nemoclaw/credentials.json`.
 
@@ -58,7 +68,17 @@ On systems with cgroup v2 (Ubuntu 24.04, DGX Spark, WSL2), it verifies that Dock
 List all registered sandboxes with their model, provider, and policy presets.
 
 ```console
-$ nemoclaw list
+$ nemoclaw list [--json]
+```
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Output structured JSON for scripting |
+
+Example JSON output:
+
+```console
+$ nemoclaw list --json | jq '.sandboxes[].name'
 ```
 
 ### `nemoclaw deploy`
@@ -74,6 +94,27 @@ The deploy script installs Docker, NVIDIA Container Toolkit if a GPU is present,
 $ nemoclaw deploy <instance-name>
 ```
 
+### `nemoclaw gui`
+
+Launch the NemoClaw web dashboard in your browser.
+
+```console
+$ nemoclaw gui [--port <port>] [--no-open]
+```
+
+| Flag | Effect |
+|------|--------|
+| `--port <port>` | Run dashboard on a custom port (default: 3000) |
+| `--no-open` | Don't auto-open the browser |
+
+Examples:
+
+```console
+$ nemoclaw gui
+$ nemoclaw gui --port 8888
+$ nemoclaw gui --no-open
+```
+
 ### `nemoclaw <name> connect`
 
 Connect to a sandbox by name.
@@ -87,8 +128,12 @@ $ nemoclaw my-assistant connect
 Show sandbox status, health, and inference configuration.
 
 ```console
-$ nemoclaw my-assistant status
+$ nemoclaw my-assistant status [--json]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Output structured JSON for scripting |
 
 ### `nemoclaw <name> logs`
 
@@ -111,8 +156,12 @@ Back up your workspace first by following the instructions at [Back Up and Resto
 :::
 
 ```console
-$ nemoclaw my-assistant destroy
+$ nemoclaw my-assistant destroy [--yes|--force]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--yes`, `--force` | Skip the confirmation prompt |
 
 ### `nemoclaw <name> policy-add`
 
@@ -128,8 +177,12 @@ $ nemoclaw my-assistant policy-add
 List available policy presets and show which ones are applied to the sandbox.
 
 ```console
-$ nemoclaw my-assistant policy-list
+$ nemoclaw my-assistant policy-list [--json]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Output structured JSON for scripting |
 
 ### `openshell term`
 
@@ -165,8 +218,39 @@ $ nemoclaw stop
 Show the sandbox list and the status of auxiliary services.
 
 ```console
-$ nemoclaw status
+$ nemoclaw status [--json]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Output structured JSON for scripting |
+
+### `nemoclaw debug`
+
+Collect diagnostics for bug reports.
+
+```console
+$ nemoclaw debug [--quick] [--output FILE] [--help]
+```
+
+| Flag | Effect |
+|------|--------|
+| `--quick` | Collect a minimal set of diagnostics |
+| `--output FILE` | Save diagnostics tarball to a file |
+
+### `nemoclaw uninstall`
+
+Remove NemoClaw and all resources created during setup.
+
+```console
+$ nemoclaw uninstall [flags]
+```
+
+| Flag | Effect |
+|------|--------|
+| `--yes` | Skip the confirmation prompt |
+| `--keep-openshell` | Leave the `openshell` binary installed |
+| `--delete-models` | Also remove NemoClaw-pulled Ollama models |
 
 ### `nemoclaw setup-spark`
 
