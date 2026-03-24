@@ -266,16 +266,18 @@ nemoclaw gui --port 8888
 
 ### Dashboard Features
 
+> **All operations are fully GUI-driven** — no CLI commands required.
+
 | Feature | Description |
 |---------|-------------|
-| **Dashboard** | Sandbox overview with real-time health status and quick actions |
+| **Dashboard** | Sandbox overview with real-time health status, quick actions, and gateway **Start/Stop** control |
 | **🔔 Live Updates** | WebSocket-powered real-time sandbox status changes pushed to the dashboard |
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
-| **Onboard Wizard** | Step-by-step GUI for `nemoclaw onboard` (preflight, gateway, sandbox, inference with all providers, policy) |
-| **Sandbox Manager** | List, inspect, start/stop sandboxes with live status badges |
-| **Agent Chat** | Web-based chat interface for OpenClaw agent interaction |
+| **Onboard Wizard** | Step-by-step GUI that **deploys sandboxes directly** via async SSE streaming with real-time progress (preflight → gateway → sandbox → inference → policy). Passes provider config, API keys, and model selection to the CLI automatically |
+| **Sandbox Manager** | List, inspect, start/stop, and **destroy** sandboxes with confirmation dialog and live status badges |
+| **Agent Chat** | Web-based chat interface that **connects directly** to the OpenClaw agent inside the sandbox |
 | **Log Viewer** | Real-time log streaming with search and filtering |
-| **Policy Editor** | View and manage security policy presets |
+| **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status |
 | **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
 
@@ -331,7 +333,7 @@ Ports locked by environment variables are shown with a 🔒 icon and cannot be e
 ### Environment Variables
 
 | Variable | Default | Service |
-|----------|---------|---------
+|----------|---------|---------| 
 | `NEMOCLAW_GATEWAY_PORT` | 8080 | OpenShell Gateway |
 | `NEMOCLAW_DASHBOARD_PORT` | 18789 | NemoClaw Dashboard |
 | `NEMOCLAW_VLLM_PORT` | 8000 | vLLM Server |
