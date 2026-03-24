@@ -74,6 +74,23 @@ function exitWithSpawnResult(result) {
 // ── Commands ─────────────────────────────────────────────────────
 
 async function onboard(args) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw onboard${R} — Interactive setup wizard
+
+  ${G}Usage:${R}
+    nemoclaw onboard [--non-interactive]
+
+  ${G}Options:${R}
+    --non-interactive    Skip interactive prompts (use env vars and defaults)
+
+  ${G}Examples:${R}
+    nemoclaw onboard
+    nemoclaw onboard --non-interactive
+    NVIDIA_API_KEY=nvapi-... nemoclaw onboard --non-interactive
+`);
+    return;
+  }
   const { onboard: runOnboard } = require("./lib/onboard");
   const allowedArgs = new Set(["--non-interactive"]);
   const unknownArgs = args.filter((arg) => !allowedArgs.has(arg));
@@ -102,15 +119,20 @@ async function setupSpark() {
   run(`sudo -E NVIDIA_API_KEY=${shellQuote(process.env.NVIDIA_API_KEY)} bash "${SCRIPTS}/setup-spark.sh"`);
 }
 
-async function deploy(instanceName) {
-  if (!instanceName) {
-    console.error("  Usage: nemoclaw deploy <instance-name>");
-    console.error("");
-    console.error("  Examples:");
-    console.error("    nemoclaw deploy my-gpu-box");
-    console.error("    nemoclaw deploy nemoclaw-prod");
-    console.error("    nemoclaw deploy nemoclaw-test");
-    process.exit(1);
+async function deploy(instanceName, args = []) {
+  if (args.includes("--help") || !instanceName) {
+    console.log(`
+  ${B}nemoclaw deploy${R} — Deploy to a Brev VM
+
+  ${G}Usage:${R}
+    nemoclaw deploy <instance-name>
+
+  ${G}Examples:${R}
+    nemoclaw deploy my-gpu-box
+    nemoclaw deploy nemoclaw-prod
+`);
+    if (!instanceName && !args.includes("--help")) process.exit(1);
+    return;
   }
   await ensureApiKey();
   if (isRepoPrivate("NVIDIA/OpenShell")) {
@@ -204,7 +226,22 @@ async function deploy(instanceName) {
   runInteractive(`ssh -t -o StrictHostKeyChecking=no -o LogLevel=ERROR ${qname} 'cd /home/ubuntu/nemoclaw && set -a && . .env && set +a && openshell sandbox connect nemoclaw'`);
 }
 
-async function start() {
+async function start(args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw start${R} — Start auxiliary services
+
+  ${G}Usage:${R}
+    nemoclaw start
+
+  Starts the Telegram bridge and cloudflared tunnel.
+  Requires ${D}TELEGRAM_BOT_TOKEN${R} for the Telegram bridge.
+
+  ${G}Example:${R}
+    TELEGRAM_BOT_TOKEN=... nemoclaw start
+`);
+    return;
+  }
   await ensureApiKey();
   const { defaultSandbox } = registry.listSandboxes();
   const safeName = defaultSandbox && /^[a-zA-Z0-9._-]+$/.test(defaultSandbox) ? defaultSandbox : null;
@@ -212,7 +249,16 @@ async function start() {
   run(`${sandboxEnv} bash "${SCRIPTS}/start-services.sh"`);
 }
 
-function stop() {
+function stop(args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw stop${R} — Stop all auxiliary services
+
+  ${G}Usage:${R}
+    nemoclaw stop
+`);
+    return;
+  }
   run(`bash "${SCRIPTS}/start-services.sh" --stop`);
 }
 
@@ -229,6 +275,25 @@ function debug(args) {
 }
 
 function uninstall(args) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw uninstall${R} — Remove NemoClaw and all resources
+
+  ${G}Usage:${R}
+    nemoclaw uninstall [flags]
+
+  ${G}Flags:${R}
+    --yes              Skip the confirmation prompt
+    --keep-openshell   Leave the openshell binary installed
+    --delete-models    Remove NemoClaw-pulled Ollama models
+
+  ${G}Examples:${R}
+    nemoclaw uninstall
+    nemoclaw uninstall --yes
+    nemoclaw uninstall --yes --delete-models
+`);
+    return;
+  }
   const localScript = resolveUninstallScript();
   if (localScript) {
     console.log(`  Running local uninstall script: ${localScript}`);
@@ -253,9 +318,32 @@ function uninstall(args) {
   exitWithSpawnResult(result);
 }
 
-function showStatus() {
-  // Show sandbox registry
+function showStatus(args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw status${R} — Show sandbox list and service status
+
+  ${G}Usage:${R}
+    nemoclaw status [--json]
+
+  ${G}Options:${R}
+    --json    Output structured JSON for scripting
+
+  ${G}Example:${R}
+    nemoclaw status
+    nemoclaw status --json
+`);
+    return;
+  }
+
   const { sandboxes, defaultSandbox } = registry.listSandboxes();
+
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ sandboxes, defaultSandbox }, null, 2));
+    return;
+  }
+
+  // Show sandbox registry
   if (sandboxes.length > 0) {
     console.log("");
     console.log("  Sandboxes:");
@@ -271,8 +359,32 @@ function showStatus() {
   run(`bash "${SCRIPTS}/start-services.sh" --status`);
 }
 
-function listSandboxes() {
+function listSandboxes(args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw list${R} — List all registered sandboxes
+
+  ${G}Usage:${R}
+    nemoclaw list [--json]
+
+  ${G}Options:${R}
+    --json    Output structured JSON for scripting
+
+  ${G}Examples:${R}
+    nemoclaw list
+    nemoclaw list --json
+    nemoclaw list --json | jq '.sandboxes[].name'
+`);
+    return;
+  }
+
   const { sandboxes, defaultSandbox } = registry.listSandboxes();
+
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ sandboxes, defaultSandbox }, null, 2));
+    return;
+  }
+
   if (sandboxes.length === 0) {
     console.log("");
     console.log("  No sandboxes registered. Run `nemoclaw onboard` to get started.");
@@ -298,7 +410,19 @@ function listSandboxes() {
 
 // ── Sandbox-scoped actions ───────────────────────────────────────
 
-function sandboxConnect(sandboxName) {
+function sandboxConnect(sandboxName, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> connect${R} — Shell into a running sandbox
+
+  ${G}Usage:${R}
+    nemoclaw <name> connect
+
+  ${G}Example:${R}
+    nemoclaw my-assistant connect
+`);
+    return;
+  }
   const qn = shellQuote(sandboxName);
   // Ensure port forward is alive before connecting
   const dashPort = ports.getPort("DASHBOARD_PORT");
@@ -306,8 +430,39 @@ function sandboxConnect(sandboxName) {
   runInteractive(`openshell sandbox connect ${qn}`);
 }
 
-function sandboxStatus(sandboxName) {
+function sandboxStatus(sandboxName, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> status${R} — Sandbox health and inference status
+
+  ${G}Usage:${R}
+    nemoclaw <name> status [--json]
+
+  ${G}Options:${R}
+    --json    Output structured JSON for scripting
+
+  ${G}Example:${R}
+    nemoclaw my-assistant status
+    nemoclaw my-assistant status --json
+`);
+    return;
+  }
+
   const sb = registry.getSandbox(sandboxName);
+
+  if (args.includes("--json")) {
+    const nimStat = nim.nimStatus(sandboxName);
+    console.log(JSON.stringify({
+      name: sandboxName,
+      model: sb?.model || "unknown",
+      provider: sb?.provider || "unknown",
+      gpuEnabled: sb?.gpuEnabled || false,
+      policies: sb?.policies || [],
+      nim: nimStat,
+    }, null, 2));
+    return;
+  }
+
   if (sb) {
     console.log("");
     console.log(`  Sandbox: ${sb.name}`);
@@ -329,12 +484,42 @@ function sandboxStatus(sandboxName) {
   console.log("");
 }
 
-function sandboxLogs(sandboxName, follow) {
+function sandboxLogs(sandboxName, follow, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> logs${R} — View sandbox logs
+
+  ${G}Usage:${R}
+    nemoclaw <name> logs [--follow]
+
+  ${G}Options:${R}
+    --follow    Stream output in real time
+
+  ${G}Example:${R}
+    nemoclaw my-assistant logs
+    nemoclaw my-assistant logs --follow
+`);
+    return;
+  }
   const followFlag = follow ? " --tail" : "";
   run(`openshell logs ${shellQuote(sandboxName)}${followFlag}`);
 }
 
-async function sandboxPolicyAdd(sandboxName) {
+async function sandboxPolicyAdd(sandboxName, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> policy-add${R} — Add a network policy preset
+
+  ${G}Usage:${R}
+    nemoclaw <name> policy-add
+
+  Interactively select and apply a policy preset to the sandbox.
+
+  ${G}Example:${R}
+    nemoclaw my-assistant policy-add
+`);
+    return;
+  }
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
 
@@ -356,9 +541,38 @@ async function sandboxPolicyAdd(sandboxName) {
   policies.applyPreset(sandboxName, answer);
 }
 
-function sandboxPolicyList(sandboxName) {
+function sandboxPolicyList(sandboxName, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> policy-list${R} — List policy presets
+
+  ${G}Usage:${R}
+    nemoclaw <name> policy-list [--json]
+
+  ${G}Options:${R}
+    --json    Output structured JSON for scripting
+
+  ${G}Example:${R}
+    nemoclaw my-assistant policy-list
+    nemoclaw my-assistant policy-list --json
+`);
+    return;
+  }
+
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
+
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({
+      sandbox: sandboxName,
+      presets: allPresets.map((p) => ({
+        name: p.name,
+        description: p.description,
+        applied: applied.includes(p.name),
+      })),
+    }, null, 2));
+    return;
+  }
 
   console.log("");
   console.log(`  Policy presets for sandbox '${sandboxName}':`);
@@ -370,6 +584,22 @@ function sandboxPolicyList(sandboxName) {
 }
 
 async function sandboxDestroy(sandboxName, args = []) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw <name> destroy${R} — Stop NIM and delete sandbox
+
+  ${G}Usage:${R}
+    nemoclaw <name> destroy [--yes|--force]
+
+  ${G}Options:${R}
+    --yes, --force   Skip the confirmation prompt
+
+  ${G}Example:${R}
+    nemoclaw my-assistant destroy
+    nemoclaw my-assistant destroy --yes
+`);
+    return;
+  }
   const skipConfirm = args.includes("--yes") || args.includes("--force");
   if (!skipConfirm) {
     const { prompt: askPrompt } = require("./lib/credentials");
@@ -395,6 +625,25 @@ async function sandboxDestroy(sandboxName, args = []) {
 // ── GUI ──────────────────────────────────────────────────────────
 
 async function gui(args) {
+  if (args.includes("--help")) {
+    console.log(`
+  ${B}nemoclaw gui${R} — Launch the web dashboard
+
+  ${G}Usage:${R}
+    nemoclaw gui [--port <port>] [--no-open]
+
+  ${G}Options:${R}
+    --port <port>    Run dashboard on a custom port (default: 3000)
+    --no-open        Don't auto-open the browser
+
+  ${G}Examples:${R}
+    nemoclaw gui
+    nemoclaw gui --port 8888
+    nemoclaw gui --no-open
+`);
+    return;
+  }
+
   const guiDir = path.join(ROOT, "gui");
   if (!fs.existsSync(path.join(guiDir, "package.json"))) {
     console.error("  GUI not found. Run 'npm install' in the gui/ directory first.");
@@ -529,14 +778,14 @@ const [cmd, ...args] = process.argv.slice(2);
       case "onboard": await onboard(args); break;
       case "setup": await setup(); break;
       case "setup-spark": await setupSpark(); break;
-      case "deploy": await deploy(args[0]); break;
-      case "start": await start(); break;
-      case "stop": stop(); break;
-      case "status": showStatus(); break;
+      case "deploy": await deploy(args[0], args.slice(1)); break;
+      case "start": await start(args); break;
+      case "stop": stop(args); break;
+      case "status": showStatus(args); break;
       case "debug": debug(args); break;
       case "uninstall": uninstall(args); break;
       case "gui": await gui(args); break;
-      case "list": listSandboxes(); break;
+      case "list": listSandboxes(args); break;
       case "--version":
       case "-v": {
         const pkg = require(path.join(__dirname, "..", "package.json"));
@@ -556,11 +805,11 @@ const [cmd, ...args] = process.argv.slice(2);
     const actionArgs = args.slice(1);
 
     switch (action) {
-      case "connect": sandboxConnect(cmd); break;
-      case "status": sandboxStatus(cmd); break;
-      case "logs": sandboxLogs(cmd, actionArgs.includes("--follow")); break;
-      case "policy-add": await sandboxPolicyAdd(cmd); break;
-      case "policy-list": sandboxPolicyList(cmd); break;
+      case "connect": sandboxConnect(cmd, actionArgs); break;
+      case "status": sandboxStatus(cmd, actionArgs); break;
+      case "logs": sandboxLogs(cmd, actionArgs.includes("--follow"), actionArgs); break;
+      case "policy-add": await sandboxPolicyAdd(cmd, actionArgs); break;
+      case "policy-list": sandboxPolicyList(cmd, actionArgs); break;
       case "destroy": await sandboxDestroy(cmd, actionArgs); break;
       default:
         console.error(`  Unknown action: ${action}`);
