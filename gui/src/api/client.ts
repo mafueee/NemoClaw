@@ -124,7 +124,53 @@ export const api = {
             method: 'POST',
             body: JSON.stringify({ endpoint, apiKey }),
         }),
+
+    // Claws
+    listClaws: () => request<{ ok: boolean; claws: ClawInstance[] }>('/claws'),
+    getClaw: (id: string) => request<{ ok: boolean; claw: ClawInstance }>(`/claws/${id}`),
+    getClawStatus: (id: string) => request<{ ok: boolean; id: string; status: string; sandboxStatus: string; lastConnected: string }>(`/claws/${id}/status`),
+    reconnectClaw: (id: string) =>
+        request<{ ok: boolean; claw: ClawInstance; connectCmd: string }>(`/claws/${id}/reconnect`, { method: 'POST' }),
+    updateClawConfig: (id: string, config: Partial<ClawConfig>) =>
+        request<{ ok: boolean; claw: ClawInstance }>(`/claws/${id}/config`, {
+            method: 'PUT',
+            body: JSON.stringify(config),
+        }),
+    destroyClaw: (id: string, preserveSandbox = false) =>
+        request<{ ok: boolean; message: string }>(`/claws/${id}?preserveSandbox=${preserveSandbox}`, { method: 'DELETE' }),
+    syncClaws: () =>
+        request<{ ok: boolean; claws: ClawInstance[] }>('/claws/sync', { method: 'POST' }),
+    getClawGateways: () =>
+        request<{ ok: boolean; gateways: { name: string; active: boolean }[] }>('/claws/gateways'),
 };
+
+export interface ClawInstance {
+    id: string;
+    sandboxName: string;
+    gatewayName: string;
+    createdAt: string;
+    lastConnected: string | null;
+    config: ClawConfig;
+    status: 'running' | 'stopped' | 'error' | 'creating' | 'unknown';
+    sandboxStatus?: string;
+    detail?: string;
+    discovered?: boolean;
+}
+
+export interface ClawConfig {
+    provider?: string;
+    model?: string;
+    endpointUrl?: string;
+}
+
+export interface CreateClawRequest {
+    name: string;
+    gatewayName?: string;
+    provider?: string;
+    model?: string;
+    apiKey?: string;
+    endpoint?: string;
+}
 
 export interface InferenceConfigData {
     endpointType?: string;
