@@ -1,22 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, createWebSocket } from '../../api/client';
-import type { Sandbox, GatewayStatus } from '../../api/client';
+import { api } from '../../api/client';
+import type { Sandbox } from '../../api/client';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 export function DashboardPage() {
+    const { connected, sandboxes: wsSandboxes, gateway } = useWebSocket();
     const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
-    const [gateway, setGateway] = useState<GatewayStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [updatedNames, setUpdatedNames] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        if (wsSandboxes.length > 0) {
+            setSandboxes((prev) => {
+                const changed = new Set<string>();
+                for (const sb of wsSandboxes) {
+                    const old = prev.find((p) => p.name === sb.name);
+                    if (old && old.status !== sb.status) {
+                        changed.add(sb.name);
+                    }
+                }
+                if (changed.size > 0) {
+                    setUpdatedNames(changed);
+                    setTimeout(() => setUpdatedNames(new Set()), 1500);
+                }
+                return wsSandboxes;
+            });
+            setLoading(false);
+        }
+    }, [wsSandboxes]);
 
     const refresh = useCallback(async () => {
         try {
             setLoading(true);
-            const [sbData, gwData] = await Promise.all([
-                api.listSandboxes(),
-                api.getGatewayStatus(),
-            ]);
+            const sbData = await api.listSandboxes();
             setSandboxes(sbData.sandboxes);
-            setGateway(gwData);
             setError('');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load dashboard');
@@ -25,21 +43,9 @@ export function DashboardPage() {
         }
     }, []);
 
-    useEffect(() => {
-        refresh();
-
-        // WebSocket for real-time updates
-        const ws = createWebSocket((data: any) => {
-            if (data.type === 'status' && data.gateway) {
-                setGateway((prev) => prev ? { ...prev, healthy: data.gateway.healthy } : prev);
-            }
-        });
-
-        return () => ws.close();
-    }, [refresh]);
+    useEffect(() => { refresh(); }, [refresh]);
 
     const readySandboxes = sandboxes.filter(s => s.status === 'Ready');
-    const notReadySandboxes = sandboxes.filter(s => s.status !== 'Ready');
 
     return (
         <>
@@ -48,7 +54,6 @@ export function DashboardPage() {
                 <p>NemoClaw sandbox overview and system health</p>
             </div>
             <div className="page-body">
-                {/* Stats Row */}
                 <div className="stats-row fade-in">
                     <div className="stat-card">
                         <div className="stat-value">{sandboxes.length}</div>
@@ -67,21 +72,19 @@ export function DashboardPage() {
                         <div className="stat-label">Gateway</div>
                     </div>
                     <div className="stat-card">
-                        <div className="stat-value" style={{ color: 'var(--nc-cyan)' }}>
-                            {loading ? '...' : '✓'}
+                        <div className="stat-value" style={{ color: connected ? 'var(--nc-cyan)' : 'var(--nc-text-muted)' }}>
+                            {connected ? '🔔' : '○'}
                         </div>
-                        <div className="stat-label">API Server</div>
+                        <div className="stat-label">Live Updates</div>
                     </div>
                 </div>
 
-                {/* Error */}
                 {error && (
                     <div className="card fade-in" style={{ borderColor: 'var(--nc-red)', marginBottom: 'var(--nc-spacing-lg)' }}>
                         <div style={{ color: 'var(--nc-red)' }}>⚠ {error}</div>
                     </div>
                 )}
 
-                {/* Quick Actions */}
                 <div style={{ marginBottom: 'var(--nc-spacing-xl)' }}>
                     <h3 style={{ marginBottom: 'var(--nc-spacing-md)', fontSize: '1rem' }}>Quick Actions</h3>
                     <div className="btn-group">
@@ -91,7 +94,6 @@ export function DashboardPage() {
                     </div>
                 </div>
 
-                {/* Sandbox Cards */}
                 <h3 style={{ marginBottom: 'var(--nc-spacing-md)', fontSize: '1rem' }}>Sandboxes</h3>
                 {sandboxes.length === 0 && !loading ? (
                     <div className="card fade-in" style={{ textAlign: 'center', padding: 'var(--nc-spacing-2xl)' }}>
@@ -105,7 +107,9 @@ export function DashboardPage() {
                 ) : (
                     <div className="card-grid">
                         {sandboxes.map((sb, idx) => (
-                            <div key={sb.name} className="card fade-in" style={{ animationDelay: `${idx * 0.1}s` }}>
+                            <div key={sb.name}
+                                className={`card fade-in ${updatedNames.has(sb.name) ? 'status-updated' : ''}`}
+                                style={{ animationDelay: `${idx * 0.1}s` }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--nc-spacing-md)' }}>
                                     <div>
                                         <div className="card-title">{sb.name}</div>
@@ -116,11 +120,9 @@ export function DashboardPage() {
                                         {sb.status}
                                     </span>
                                 </div>
-
                                 <div style={{ fontSize: '0.8rem', color: 'var(--nc-text-secondary)', marginBottom: 'var(--nc-spacing-md)' }}>
                                     Created: {sb.created || 'unknown'}
                                 </div>
-
                                 <div className="btn-group">
                                     <a href={`/chat`} className="btn btn-primary btn-sm">💬 Chat</a>
                                     <a href={`/logs`} className="btn btn-secondary btn-sm">📋 Logs</a>
@@ -137,7 +139,6 @@ export function DashboardPage() {
                     </div>
                 )}
 
-                {/* Loading */}
                 {loading && (
                     <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--nc-spacing-2xl)' }}>
                         <div className="loading-spinner"></div>

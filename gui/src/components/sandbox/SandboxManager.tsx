@@ -1,12 +1,21 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../api/client';
 import type { Sandbox } from '../../api/client';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 export function SandboxManager() {
+    const { sandboxes: wsSandboxes, connected } = useWebSocket();
     const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedSandbox, setSelectedSandbox] = useState<string | null>(null);
     const [sandboxDetail, setSandboxDetail] = useState<string>('');
+
+    useEffect(() => {
+        if (wsSandboxes.length > 0) {
+            setSandboxes(wsSandboxes);
+            setLoading(false);
+        }
+    }, [wsSandboxes]);
 
     const refresh = async () => {
         setLoading(true);
@@ -39,6 +48,12 @@ export function SandboxManager() {
                 <div className="btn-group" style={{ marginBottom: 'var(--nc-spacing-lg)' }}>
                     <a href="/onboard" className="btn btn-primary">+ New Sandbox</a>
                     <button className="btn btn-secondary" onClick={refresh}>🔄 Refresh</button>
+                    {connected && (
+                        <span className="status-badge ready" style={{ alignSelf: 'center' }}>
+                            <span className="status-dot ready"></span>
+                            Live
+                        </span>
+                    )}
                 </div>
 
                 {loading ? (
@@ -50,12 +65,11 @@ export function SandboxManager() {
                         <p style={{ color: 'var(--nc-text-secondary)' }}>No sandboxes found. Create one with the onboard wizard.</p>
                     </div>
                 ) : (
-                    <div style={{ display: 'flex', gap: 'var(--nc-spacing-lg)' }}>
-                        {/* Sandbox list */}
-                        <div style={{ flex: '1' }}>
+                    <div className="sandbox-detail-layout">
+                        <div className="sandbox-list-col">
                             {sandboxes.map((sb, idx) => (
                                 <div key={sb.name}
-                                    className={`card fade-in ${selectedSandbox === sb.name ? '' : ''}`}
+                                    className={`card fade-in`}
                                     style={{
                                         marginBottom: 'var(--nc-spacing-sm)',
                                         cursor: 'pointer',
@@ -79,9 +93,8 @@ export function SandboxManager() {
                             ))}
                         </div>
 
-                        {/* Sandbox detail */}
                         {selectedSandbox && (
-                            <div style={{ flex: '1' }} className="fade-in">
+                            <div className="sandbox-detail-col fade-in">
                                 <div className="card">
                                     <h3 style={{ marginBottom: 'var(--nc-spacing-md)' }}>{selectedSandbox}</h3>
                                     <div className="btn-group" style={{ marginBottom: 'var(--nc-spacing-md)' }}>
