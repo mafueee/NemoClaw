@@ -214,7 +214,7 @@ Local inference options such as Ollama and vLLM are still experimental. On macOS
 The sandbox starts with a default policy that controls network egress and filesystem access:
 
 | Layer      | What it protects                                    | When it applies             |
-|------------|-----------------------------------------------------|-----------------------------|
+|------------|-----------------------------------------------------|-------------- --------------|
 | Network    | Blocks unauthorized outbound connections.           | Hot-reloadable at runtime.  |
 | Filesystem | Prevents reads/writes outside `/sandbox` and `/tmp`.| Locked at sandbox creation. |
 | Process    | Blocks privilege escalation and dangerous syscalls. | Locked at sandbox creation. |
@@ -265,13 +265,39 @@ nemoclaw gui --port 8888
 | Feature | Description |
 |---------|-------------|
 | **Dashboard** | Sandbox overview with real-time health status and quick actions |
+| **🔔 Live Updates** | WebSocket-powered real-time sandbox status changes pushed to the dashboard |
+| **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
 | **Onboard Wizard** | Step-by-step GUI for `nemoclaw onboard` (preflight, gateway, sandbox, inference, policy) |
-| **Sandbox Manager** | List, inspect, start/stop sandboxes |
+| **Sandbox Manager** | List, inspect, start/stop sandboxes with live status badges |
 | **Agent Chat** | Web-based chat interface for OpenClaw agent interaction |
 | **Log Viewer** | Real-time log streaming with search and filtering |
 | **Policy Editor** | View and manage security policy presets |
 | **Inference Config** | Visual provider selection (Cloud/Ollama/vLLM) and model configuration |
 | **Port Manager** | Visual port assignment table with conflict detection |
+
+### WebSocket Live Updates
+
+The dashboard uses a WebSocket connection (`/ws`) to receive real-time status updates:
+
+- **Sandbox status** — sandbox list changes (create, destroy, status transitions) are pushed automatically.
+- **Gateway health** — gateway connection state is monitored and broadcast to all connected clients.
+- **Auto-reconnect** — the frontend reconnects automatically with exponential backoff if the connection drops.
+- **Visual feedback** — sandbox cards flash with a green glow animation when their status changes in real time.
+
+### Responsive Design
+
+The dashboard adapts to three breakpoint tiers:
+
+| Breakpoint | Target | Key Adaptations |
+|------------|--------|-----------------|
+| ≤480px | Phone | Single-column layout, stacked controls, mobile header with hamburger menu |
+| ≤768px | Tablet | Sidebar overlay with backdrop, two-column stats, wrapped button groups |
+| ≤1024px | Small desktop | Adjusted card grids and provider layouts |
+
+On mobile/tablet:
+- A **hamburger menu** (☰) appears in a fixed top bar, toggling the sidebar with a dark backdrop overlay.
+- Navigation links close the sidebar automatically.
+- Tables scroll horizontally and form controls stack vertically for comfortable touch interaction.
 
 ### Build the Dashboard
 
