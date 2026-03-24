@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+import path from "path";
 
 export default defineConfig({
   test: {
@@ -17,6 +19,22 @@ export default defineConfig({
         test: {
           name: "plugin",
           include: ["nemoclaw/src/**/*.test.ts"],
+        },
+      },
+      {
+        plugins: [react()],
+        test: {
+          name: "gui",
+          include: ["gui/src/**/*.test.tsx"],
+          environment: "jsdom",
+          setupFiles: [path.resolve(__dirname, "gui/src/test/setup.ts")],
+          deps: {
+            optimizer: {
+              web: {
+                include: ["@testing-library/jest-dom"],
+              },
+            },
+          },
         },
       },
     ],

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "prepare": "if [ -d .git ]; then prek install; fi",
+    "prepare": "if [ -d .git ] && command -v prek >/dev/null 2>&1; then prek install; fi",
     "prepublishOnly": "cd nemoclaw && env -u npm_config_global -u npm_config_prefix -u npm_config_omit npm install --ignore-scripts && ./node_modules/.bin/tsc"
   },
   "dependencies": {
@@ -35,7 +35,17 @@
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
     "@j178/prek": "^0.3.6",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.0",
+    "jsdom": "^29.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.2",
     "vitest": "^4.1.0"
   }
 }
