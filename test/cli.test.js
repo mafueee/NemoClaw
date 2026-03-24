@@ -90,4 +90,67 @@ describe("CLI dispatch", () => {
     expect(r.out.includes("Troubleshooting")).toBeTruthy();
     expect(r.out.includes("nemoclaw debug")).toBeTruthy();
   });
+
+  // ── --json output tests (#753) ──────────────────────────────────
+  it("list --json outputs valid JSON", () => {
+    const r = run("list --json");
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.out);
+    expect(parsed).toHaveProperty("sandboxes");
+    expect(parsed).toHaveProperty("defaultSandbox");
+    expect(Array.isArray(parsed.sandboxes)).toBe(true);
+  });
+
+  it("status --json outputs valid JSON", () => {
+    const r = run("status --json");
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.out);
+    expect(parsed).toHaveProperty("sandboxes");
+    expect(parsed).toHaveProperty("defaultSandbox");
+  });
+
+  // ── per-command --help tests (#757) ─────────────────────────────
+  it("list --help exits 0 and shows usage", () => {
+    const r = run("list --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+    expect(r.out.includes("--json")).toBeTruthy();
+  });
+
+  it("onboard --help exits 0 and shows usage", () => {
+    const r = run("onboard --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+    expect(r.out.includes("--non-interactive")).toBeTruthy();
+  });
+
+  it("gui --help exits 0 and shows usage", () => {
+    const r = run("gui --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+    expect(r.out.includes("--port")).toBeTruthy();
+    expect(r.out.includes("--no-open")).toBeTruthy();
+  });
+
+  it("stop --help exits 0 and shows usage", () => {
+    const r = run("stop --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+  });
+
+  it("uninstall --help exits 0 and shows flags", () => {
+    const r = run("uninstall --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+    expect(r.out.includes("--yes")).toBeTruthy();
+    expect(r.out.includes("--keep-openshell")).toBeTruthy();
+    expect(r.out.includes("--delete-models")).toBeTruthy();
+  });
+
+  it("status --help exits 0 and shows usage", () => {
+    const r = run("status --help");
+    expect(r.code).toBe(0);
+    expect(r.out.includes("Usage")).toBeTruthy();
+    expect(r.out.includes("--json")).toBeTruthy();
+  });
 });
