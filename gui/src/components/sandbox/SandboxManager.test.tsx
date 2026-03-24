@@ -12,6 +12,15 @@ vi.mock('../../api/client', async () => {
     return { api: { listSandboxes, getSandboxStatus, stopSandbox } };
 });
 
+vi.mock('../../hooks/useWebSocket', () => ({
+    useWebSocket: () => ({
+        connected: true,
+        sandboxes: [],
+        gateway: null,
+        send: vi.fn(),
+    }),
+}));
+
 const { api } = await import('../../api/client');
 
 describe('SandboxManager', () => {
@@ -51,5 +60,10 @@ describe('SandboxManager', () => {
             expect(screen.getAllByText('my-sandbox').length).toBeGreaterThan(0);
             expect(screen.getAllByText('test-box').length).toBeGreaterThan(0);
         });
+    });
+
+    it('shows Live badge when connected', () => {
+        render(<SandboxManager />);
+        expect(screen.getAllByText('Live').length).toBeGreaterThan(0);
     });
 });

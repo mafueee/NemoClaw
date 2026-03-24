@@ -15,13 +15,21 @@ vi.mock('../../api/client', async () => {
     };
 });
 
+vi.mock('../../hooks/useWebSocket', () => ({
+    useWebSocket: () => ({
+        connected: true,
+        sandboxes: [],
+        gateway: { healthy: true, ok: true, output: '' },
+        send: vi.fn(),
+    }),
+}));
+
 const { api } = await import('../../api/client');
 
 describe('DashboardPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(api.listSandboxes).mockResolvedValue({ sandboxes: [], raw: '' });
-        vi.mocked(api.getGatewayStatus).mockResolvedValue({ healthy: true, ok: true, output: '' });
     });
 
     it('renders the page header', () => {
@@ -59,18 +67,18 @@ describe('DashboardPage', () => {
 
     it('shows error when API fails', async () => {
         vi.mocked(api.listSandboxes).mockRejectedValue(new Error('Network error'));
-        vi.mocked(api.getGatewayStatus).mockRejectedValue(new Error('Network error'));
         render(<DashboardPage />);
         await waitFor(() => {
             expect(screen.getAllByText(/Network error/).length).toBeGreaterThan(0);
         });
     });
 
-    it('renders stat cards', async () => {
+    it('renders stat cards including live updates', async () => {
         render(<DashboardPage />);
         await waitFor(() => {
             expect(screen.getAllByText('Total Sandboxes').length).toBeGreaterThan(0);
         });
         expect(screen.getAllByText('Gateway').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Live Updates').length).toBeGreaterThan(0);
     });
 });
