@@ -27,7 +27,7 @@ if (existsSync(distDir)) {
     app.use(express.static(distDir));
 }
 
-// ── Helper: run CLI command safely ────────────────────────────────
+// ── Helper: run CLI command safely ──────────────────────────────
 function runCli(cmd, opts = {}) {
     try {
         const output = execSync(cmd, {
@@ -107,8 +107,9 @@ app.get('/api/gateway/status', (req, res) => {
 
 function loadPortsModule() {
     const portsPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'ports.js');
-    // Clear require cache so we always get fresh config reads
-    delete loadPortsModule._cache?.[portsPath];
+    // Clear Node's require cache so we always get fresh config reads
+    const resolvedPath = require.resolve(portsPath);
+    delete require.cache[resolvedPath];
     // Use dynamic require for CommonJS module
     const mod = require(portsPath);
     return mod;
@@ -264,7 +265,7 @@ app.get('/api/onboard/preflight', async (req, res) => {
     res.json({ checks });
 });
 
-// ── WebSocket for real-time updates ───────────────────────────────
+// ── WebSocket for real-time updates ─────────────────────────────
 
 // Shared state for change detection
 let lastSandboxJson = '';
