@@ -457,10 +457,15 @@ app.post('/api/onboard/execute', (req, res) => {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
     });
+    res.flushHeaders();
 
     const sendEvent = (data) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        if (clientDisconnected) return;
+        try {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        } catch { /* client gone */ }
     };
 
     const safeName = (sandboxName || 'my-assistant').toLowerCase().replace(/[^a-z0-9-]/g, '');
@@ -500,6 +505,8 @@ app.post('/api/onboard/execute', (req, res) => {
     let lastStepSent = '';
     let cliSucceeded = false;
     let cliProcess = null;
+    let cliFinished = false;
+    let clientDisconnected = false;
 
     // Parse CLI output lines into SSE events
     function parseCliLine(rawLine) {
@@ -589,7 +596,8 @@ app.post('/api/onboard/execute', (req, res) => {
         res.end();
     });
 
-    cliProcess.on('close', (code) => {
+    cliProcess.on('close', (code, signal) => {
+        cliFinished = true;
         // Flush remaining buffers
         if (buffer.trim()) parseCliLine(buffer);
         if (errBuffer.trim()) parseCliLine(errBuffer);
@@ -630,9 +638,9 @@ app.post('/api/onboard/execute', (req, res) => {
         res.end();
     });
 
-    req.on('close', () => {
-        // Client disconnected — kill the CLI process if still running
-        if (cliProcess && !cliProcess.killed) {
+    res.on('close', () => {
+        clientDisconnected = true;
+        if (cliProcess && !cliProcess.killed && !cliFinished) {
             cliProcess.kill('SIGTERM');
         }
     });
