@@ -9,7 +9,10 @@ export function SandboxManager() {
     const [loading, setLoading] = useState(true);
     const [selectedSandbox, setSelectedSandbox] = useState<string | null>(null);
     const [sandboxDetail, setSandboxDetail] = useState<string>('');
+    const [destroyConfirm, setDestroyConfirm] = useState<string | null>(null);
+    const [actionLoading, setActionLoading] = useState(false);
 
+    // Sync WebSocket sandbox data
     useEffect(() => {
         if (wsSandboxes.length > 0) {
             setSandboxes(wsSandboxes);
@@ -26,6 +29,7 @@ export function SandboxManager() {
         setLoading(false);
     };
 
+    // Initial REST fallback
     useEffect(() => { refresh(); }, []);
 
     const showDetail = async (name: string) => {
@@ -36,6 +40,20 @@ export function SandboxManager() {
         } catch {
             setSandboxDetail('Failed to fetch sandbox details');
         }
+    };
+
+    const handleDestroy = async (name: string) => {
+        setActionLoading(true);
+        try {
+            await api.destroySandbox(name);
+            setSelectedSandbox(null);
+            setSandboxDetail('');
+            setDestroyConfirm(null);
+            await refresh();
+        } catch (err) {
+            setSandboxDetail(`Destroy failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+        setActionLoading(false);
     };
 
     return (
@@ -66,6 +84,7 @@ export function SandboxManager() {
                     </div>
                 ) : (
                     <div className="sandbox-detail-layout">
+                        {/* Sandbox list */}
                         <div className="sandbox-list-col">
                             {sandboxes.map((sb, idx) => (
                                 <div key={sb.name}
@@ -93,6 +112,7 @@ export function SandboxManager() {
                             ))}
                         </div>
 
+                        {/* Sandbox detail */}
                         {selectedSandbox && (
                             <div className="sandbox-detail-col fade-in">
                                 <div className="card">
@@ -100,13 +120,53 @@ export function SandboxManager() {
                                     <div className="btn-group" style={{ marginBottom: 'var(--nc-spacing-md)' }}>
                                         <a href="/chat" className="btn btn-primary btn-sm">💬 Chat</a>
                                         <a href="/logs" className="btn btn-secondary btn-sm">📋 Logs</a>
-                                        <button className="btn btn-danger btn-sm" onClick={async () => {
-                                            if (confirm(`Stop sandbox '${selectedSandbox}'?`)) {
-                                                await api.stopSandbox(selectedSandbox);
-                                                refresh();
-                                            }
+                                        <button className="btn btn-secondary btn-sm" onClick={async () => {
+                                            await api.stopSandbox(selectedSandbox);
+                                            refresh();
                                         }}>⏹ Stop</button>
+                                        <button
+                                            className="btn btn-danger btn-sm"
+                                            onClick={() => setDestroyConfirm(selectedSandbox)}
+                                            data-testid="destroy-btn"
+                                        >
+                                            🗑️ Destroy
+                                        </button>
                                     </div>
+
+                                    {/* Destroy confirmation */}
+                                    {destroyConfirm === selectedSandbox && (
+                                        <div className="card fade-in" style={{
+                                            background: 'var(--nc-bg-secondary)',
+                                            borderColor: 'var(--nc-red)',
+                                            marginBottom: 'var(--nc-spacing-md)',
+                                            padding: 'var(--nc-spacing-md)',
+                                        }}>
+                                            <p style={{ color: 'var(--nc-red)', fontWeight: 600, marginBottom: 'var(--nc-spacing-sm)' }}>
+                                                ⚠️ Destroy sandbox '{selectedSandbox}'?
+                                            </p>
+                                            <p style={{ fontSize: '0.8rem', color: 'var(--nc-text-secondary)', marginBottom: 'var(--nc-spacing-md)' }}>
+                                                This will stop all containers and permanently delete the sandbox. This cannot be undone.
+                                            </p>
+                                            <div className="btn-group">
+                                                <button
+                                                    className="btn btn-danger btn-sm"
+                                                    onClick={() => handleDestroy(selectedSandbox)}
+                                                    disabled={actionLoading}
+                                                    data-testid="confirm-destroy-btn"
+                                                >
+                                                    {actionLoading ? 'Destroying...' : 'Yes, Destroy'}
+                                                </button>
+                                                <button
+                                                    className="btn btn-secondary btn-sm"
+                                                    onClick={() => setDestroyConfirm(null)}
+                                                    data-testid="cancel-destroy-btn"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div className="log-viewer">
                                         <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{sandboxDetail}</pre>
                                     </div>
