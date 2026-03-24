@@ -582,6 +582,139 @@ pre {
   color: var(--nc-green);
 }
 
+/* ── Port Editing UI ───────────────────────────────────────────── */
+.port-input-wrapper {
+  position: relative;
+}
+
+.port-input {
+  width: 100px;
+  padding: 6px 10px;
+  background: var(--nc-bg-input);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-green);
+  font-family: var(--nc-font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: border-color var(--nc-transition-fast), box-shadow var(--nc-transition-fast);
+  -moz-appearance: textfield;
+}
+
+.port-input::-webkit-outer-spin-button,
+.port-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.port-input:focus {
+  outline: none;
+  border-color: var(--nc-green);
+  box-shadow: 0 0 0 3px var(--nc-green-glow);
+}
+
+.port-input-error {
+  border-color: var(--nc-red) !important;
+  box-shadow: 0 0 0 3px rgba(255, 71, 87, 0.15) !important;
+}
+
+.port-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  font-size: 0.7rem;
+  color: var(--nc-red);
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+.port-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.port-source-default {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--nc-text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.port-source-config {
+  background: rgba(0, 188, 212, 0.12);
+  color: var(--nc-cyan);
+  border: 1px solid rgba(0, 188, 212, 0.3);
+}
+
+.port-source-env {
+  background: rgba(118, 185, 0, 0.12);
+  color: var(--nc-green);
+  border: 1px solid rgba(118, 185, 0, 0.3);
+}
+
+.port-actions {
+  display: flex;
+  gap: var(--nc-spacing-sm);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.port-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--nc-spacing-sm);
+  padding: var(--nc-spacing-sm) var(--nc-spacing-md);
+  border-radius: var(--nc-radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.port-banner-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: opacity var(--nc-transition-fast);
+}
+
+.port-banner-close:hover {
+  opacity: 1;
+}
+
+.port-banner-success {
+  background: rgba(118, 185, 0, 0.12);
+  color: var(--nc-green);
+  border: 1px solid rgba(118, 185, 0, 0.25);
+}
+
+.port-banner-error {
+  background: rgba(255, 71, 87, 0.12);
+  color: var(--nc-red);
+  border: 1px solid rgba(255, 71, 87, 0.25);
+}
+
+.port-banner-warning {
+  background: rgba(255, 165, 2, 0.12);
+  color: var(--nc-amber);
+  border: 1px solid rgba(255, 165, 2, 0.25);
+}
+
+.port-banner-info {
+  background: rgba(0, 188, 212, 0.12);
+  color: var(--nc-cyan);
+  border: 1px solid rgba(0, 188, 212, 0.25);
+}
+
 /* ── Wizard Steps ───────────────────────────────────────────────── */
 .wizard-steps {
   display: flex;
