@@ -21,10 +21,19 @@ vi.mock('./api/client', () => ({
     streamLogs: () => () => { },
 }));
 
+vi.mock('./hooks/useWebSocket', () => ({
+    useWebSocket: () => ({
+        connected: false,
+        sandboxes: [],
+        gateway: null,
+        send: vi.fn(),
+    }),
+}));
+
 describe('App', () => {
     it('renders the sidebar brand', () => {
         render(<App />);
-        expect(screen.getByText('⚡ NemoClaw')).toBeInTheDocument();
+        expect(screen.getAllByText('⚡ NemoClaw').length).toBeGreaterThan(0);
     });
 
     it('renders navigation links', () => {

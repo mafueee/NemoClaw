@@ -25,7 +25,7 @@ export default defineConfig({
         plugins: [react()],
         test: {
           name: "gui",
-          include: ["gui/src/**/*.test.tsx"],
+          include: ["gui/src/**/*.test.tsx", "gui/src/**/*.test.ts"],
           environment: "jsdom",
           setupFiles: [path.resolve(__dirname, "gui/src/test/setup.ts")],
           deps: {

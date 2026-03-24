@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { DashboardPage } from './components/dashboard/DashboardPage';
 import { OnboardWizard } from './components/onboard/OnboardWizard';
@@ -12,9 +12,28 @@ import { ChatInterface } from './components/chat/ChatInterface';
 export default function App() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
+    const closeSidebar = () => setSidebarOpen(false);
+
     return (
         <BrowserRouter>
             <div className="app-layout">
+                {/* Mobile Header */}
+                <header className="mobile-header">
+                    <button
+                        className="hamburger-btn"
+                        onClick={() => setSidebarOpen(!sidebarOpen)}
+                        aria-label="Toggle navigation"
+                    >
+                        {sidebarOpen ? '✕' : '☰'}
+                    </button>
+                    <span className="mobile-header-title">⚡ NemoClaw</span>
+                </header>
+
+                {/* Sidebar Backdrop (mobile) */}
+                {sidebarOpen && (
+                    <div className="sidebar-backdrop" onClick={closeSidebar} />
+                )}
+
                 {/* Sidebar */}
                 <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
                     <div className="sidebar-brand">
@@ -27,39 +46,39 @@ export default function App() {
                     <nav className="sidebar-nav">
                         <div className="nav-section-title">Overview</div>
                         <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             📊 Dashboard
                         </NavLink>
                         <NavLink to="/onboard" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             🚀 Onboard
                         </NavLink>
 
                         <div className="nav-section-title">Sandboxes</div>
                         <NavLink to="/sandboxes" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             📦 Sandboxes
                         </NavLink>
                         <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             📋 Logs
                         </NavLink>
                         <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             💬 Agent Chat
                         </NavLink>
 
                         <div className="nav-section-title">Configuration</div>
                         <NavLink to="/inference" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             🧠 Inference
                         </NavLink>
                         <NavLink to="/policies" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             🛡️ Policies
                         </NavLink>
                         <NavLink to="/ports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}>
+                            onClick={closeSidebar}>
                             🔌 Ports
                         </NavLink>
                     </nav>
