@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../api/client';
 import type { PreflightCheck } from '../../api/client';
+import { PROVIDERS } from '../../data/providers';
 
 const WIZARD_STEPS = [
     { id: 'preflight', title: 'Preflight' },
@@ -18,6 +19,18 @@ export function OnboardWizard() {
     const [sandboxName, setSandboxName] = useState('my-assistant');
     const [provider, setProvider] = useState('cloud');
     const [apiKey, setApiKey] = useState('');
+    const [endpoint, setEndpoint] = useState(PROVIDERS[0].defaultEndpoint);
+    const [model, setModel] = useState(PROVIDERS[0].models[0]);
+
+    const currentProvider = PROVIDERS.find(p => p.key === provider)!;
+
+    const switchProvider = (key: string) => {
+        const p = PROVIDERS.find(pr => pr.key === key)!;
+        setProvider(key);
+        setModel(p.models[0]);
+        setEndpoint(p.defaultEndpoint);
+        setApiKey('');
+    };
 
     const runPreflight = async () => {
         setLoading(true);
@@ -37,6 +50,10 @@ export function OnboardWizard() {
     }, [currentStep]);
 
     const allPassed = checks.length > 0 && checks.every(c => c.ok || c.warning);
+
+    // Determine which fields to show for the selected provider
+    const showApiKey = ['cloud', 'openrouter', 'gemini', 'ollama'].includes(provider);
+    const showEndpoint = currentProvider.endpointEditable;
 
     return (
         <>
@@ -87,7 +104,8 @@ export function OnboardWizard() {
                                     </div>
                                     <div className="btn-group" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
                                         <button className="btn btn-secondary" onClick={runPreflight}>🔄 Re-check</button>
-                                        <button className="btn btn-primary" disabled={!allPassed} onClick={() => setCurrentStep(1)}>
+                                        <button className="btn btn-primary" disabled={!allPassed} onClick={() => setCurrentStep(1)}
+                                            data-testid="continue-preflight">
                                             Continue →
                                         </button>
                                     </div>
@@ -109,7 +127,8 @@ export function OnboardWizard() {
                             </div>
                             <div className="btn-group" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
                                 <button className="btn btn-secondary" onClick={() => setCurrentStep(0)}>← Back</button>
-                                <button className="btn btn-primary" onClick={() => setCurrentStep(2)}>Continue →</button>
+                                <button className="btn btn-primary" onClick={() => setCurrentStep(2)}
+                                    data-testid="continue-gateway">Continue →</button>
                             </div>
                         </div>
                     )}
@@ -133,7 +152,8 @@ export function OnboardWizard() {
                             <div className="btn-group" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
                                 <button className="btn btn-secondary" onClick={() => setCurrentStep(1)}>← Back</button>
                                 <button className="btn btn-primary" disabled={!sandboxName || sandboxName.length < 2}
-                                    onClick={() => setCurrentStep(3)}>Continue →</button>
+                                    onClick={() => setCurrentStep(3)}
+                                    data-testid="continue-sandbox">Continue →</button>
                             </div>
                         </div>
                     )}
@@ -142,14 +162,12 @@ export function OnboardWizard() {
                     {currentStep === 3 && (
                         <div>
                             <h3 style={{ marginBottom: 'var(--nc-spacing-lg)' }}>Inference Provider</h3>
+
+                            {/* Provider Cards */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--nc-spacing-sm)' }}>
-                                {[
-                                    { key: 'cloud', icon: '☁️', title: 'NVIDIA Cloud API', desc: 'build.nvidia.com — recommended for getting started' },
-                                    { key: 'ollama', icon: '🦙', title: 'Local Ollama', desc: 'Run models locally on your machine' },
-                                    { key: 'vllm', icon: '⚡', title: 'Local vLLM', desc: 'High-performance inference server' },
-                                ].map(opt => (
+                                {PROVIDERS.map(opt => (
                                     <div key={opt.key}
-                                        onClick={() => setProvider(opt.key)}
+                                        onClick={() => switchProvider(opt.key)}
                                         style={{
                                             display: 'flex', alignItems: 'center', gap: 'var(--nc-spacing-md)',
                                             padding: 'var(--nc-spacing-md)',
@@ -167,25 +185,60 @@ export function OnboardWizard() {
                                 ))}
                             </div>
 
-                            {provider === 'cloud' && (
+                            {/* API Key input (shown for cloud, openrouter, gemini, ollama) */}
+                            {showApiKey && (
                                 <div className="form-group" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
-                                    <label className="form-label">NVIDIA API Key</label>
+                                    <label className="form-label">
+                                        {currentProvider.apiKeyEnv.replace(/_/g, ' ')}
+                                    </label>
                                     <input
                                         className="input"
                                         type="password"
                                         value={apiKey}
                                         onChange={(e) => setApiKey(e.target.value)}
-                                        placeholder="nvapi-..."
+                                        placeholder={currentProvider.apiKeyPlaceholder}
                                     />
-                                    <p style={{ fontSize: '0.75rem', color: 'var(--nc-text-muted)', marginTop: 'var(--nc-spacing-xs)' }}>
-                                        Get your key at <a href="https://build.nvidia.com" target="_blank" rel="noopener">build.nvidia.com</a>
-                                    </p>
+                                    {currentProvider.apiKeyHelp && (
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--nc-text-muted)', marginTop: 'var(--nc-spacing-xs)' }}>
+                                            {currentProvider.apiKeyHelp}{' '}
+                                            {currentProvider.apiKeyHelpUrl && (
+                                                <a href={currentProvider.apiKeyHelpUrl} target="_blank" rel="noopener">
+                                                    {currentProvider.apiKeyHelpUrl}
+                                                </a>
+                                            )}
+                                        </p>
+                                    )}
                                 </div>
                             )}
 
+                            {/* Endpoint URL input (shown for editable-endpoint providers) */}
+                            {showEndpoint && (
+                                <div className="form-group" style={{ marginTop: 'var(--nc-spacing-md)' }}>
+                                    <label className="form-label">Endpoint URL</label>
+                                    <input
+                                        className="input"
+                                        type="url"
+                                        value={endpoint}
+                                        onChange={(e) => setEndpoint(e.target.value)}
+                                        placeholder={currentProvider.defaultEndpoint}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Model selector */}
+                            <div className="form-group" style={{ marginTop: 'var(--nc-spacing-md)' }}>
+                                <label className="form-label">Model</label>
+                                <select className="input" value={model} onChange={(e) => setModel(e.target.value)}>
+                                    {currentProvider.models.map(m => (
+                                        <option key={m} value={m}>{m}</option>
+                                    ))}
+                                </select>
+                            </div>
+
                             <div className="btn-group" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
                                 <button className="btn btn-secondary" onClick={() => setCurrentStep(2)}>← Back</button>
-                                <button className="btn btn-primary" onClick={() => setCurrentStep(4)}>Continue →</button>
+                                <button className="btn btn-primary" onClick={() => setCurrentStep(4)}
+                                    data-testid="continue-inference">Continue →</button>
                             </div>
                         </div>
                     )}
@@ -218,7 +271,7 @@ export function OnboardWizard() {
                             <div style={{ fontSize: '4rem', marginBottom: 'var(--nc-spacing-md)' }}>🎉</div>
                             <h3 style={{ marginBottom: 'var(--nc-spacing-sm)' }}>Setup Complete!</h3>
                             <p style={{ color: 'var(--nc-text-secondary)', marginBottom: 'var(--nc-spacing-lg)' }}>
-                                Your sandbox <strong>{sandboxName}</strong> is configured.
+                                Your sandbox <strong>{sandboxName}</strong> is configured with <strong>{currentProvider.title}</strong>.
                                 <br />To create it, run the following command:
                             </p>
                             <div className="card" style={{ background: 'var(--nc-bg-secondary)', textAlign: 'left', marginBottom: 'var(--nc-spacing-lg)' }}>
