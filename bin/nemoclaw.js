@@ -30,12 +30,14 @@ const {
 const registry = require("./lib/registry");
 const nim = require("./lib/nim");
 const policies = require("./lib/policies");
+const ports = require("./lib/ports");
 
 // ── Global commands ──────────────────────────────────────────────
 
 const GLOBAL_COMMANDS = new Set([
   "onboard", "list", "deploy", "setup", "setup-spark",
   "start", "stop", "status", "debug", "uninstall",
+  "gui",
   "help", "--help", "-h", "--version", "-v",
 ]);
 
@@ -184,8 +186,8 @@ async function deploy(instanceName) {
   try {
     run(`scp -q -o StrictHostKeyChecking=no -o LogLevel=ERROR ${shellQuote(envTmp)} ${qname}:/home/ubuntu/nemoclaw/.env`);
   } finally {
-    try { fs.unlinkSync(envTmp); } catch {}
-    try { fs.rmdirSync(envDir); } catch {}
+    try { fs.unlinkSync(envTmp); } catch { }
+    try { fs.rmdirSync(envDir); } catch { }
   }
 
   console.log("  Running setup...");
@@ -299,7 +301,8 @@ function listSandboxes() {
 function sandboxConnect(sandboxName) {
   const qn = shellQuote(sandboxName);
   // Ensure port forward is alive before connecting
-  run(`openshell forward start --background 18789 ${qn} 2>/dev/null || true`, { ignoreError: true });
+  const dashPort = ports.getPort("DASHBOARD_PORT");
+  run(`openshell forward start --background ${dashPort} ${qn} 2>/dev/null || true`, { ignoreError: true });
   runInteractive(`openshell sandbox connect ${qn}`);
 }
 
@@ -389,6 +392,68 @@ async function sandboxDestroy(sandboxName, args = []) {
   console.log(`  ${G}✓${R} Sandbox '${sandboxName}' destroyed`);
 }
 
+// ── GUI ──────────────────────────────────────────────────────────
+
+async function gui(args) {
+  const guiDir = path.join(ROOT, "gui");
+  if (!fs.existsSync(path.join(guiDir, "package.json"))) {
+    console.error("  GUI not found. Run 'npm install' in the gui/ directory first.");
+    process.exit(1);
+  }
+
+  // Parse --port flag
+  let guiPort = ports.getPort("GUI_PORT");
+  const portIdx = args.indexOf("--port");
+  if (portIdx !== -1 && args[portIdx + 1]) {
+    const p = parseInt(args[portIdx + 1], 10);
+    if (ports.isValidPort(p)) {
+      guiPort = p;
+    } else {
+      console.error(`  Invalid port: ${args[portIdx + 1]}. Must be 1024–65535.`);
+      process.exit(1);
+    }
+  }
+
+  // Check if port is available, auto-find if not
+  const portResult = await ports.checkPort(guiPort);
+  if (!portResult.ok) {
+    const freePort = await ports.findFreePort(guiPort);
+    console.log(`  Port ${guiPort} is in use. Using port ${freePort} instead.`);
+    guiPort = freePort;
+  }
+
+  console.log("");
+  console.log(`  ${G}NemoClaw Dashboard${R}`);
+  console.log(`  Starting on http://localhost:${guiPort}`);
+  console.log("");
+
+  // Open browser unless --no-open is passed
+  const shouldOpen = !args.includes("--no-open");
+  if (shouldOpen) {
+    const openCmd = process.platform === "darwin" ? "open" :
+      process.platform === "win32" ? "start" : "xdg-open";
+    try {
+      require("child_process").exec(`${openCmd} http://localhost:${guiPort}`);
+    } catch { /* ignore */ }
+  }
+
+  // Start the GUI server
+  const { spawn } = require("child_process");
+  const guiProcess = spawn("node", ["server/index.js"], {
+    cwd: guiDir,
+    env: {
+      ...process.env,
+      PORT: String(guiPort),
+      NEMOCLAW_ROOT: ROOT,
+    },
+    stdio: "inherit",
+  });
+
+  guiProcess.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
 // ── Help ─────────────────────────────────────────────────────────
 
 function help() {
@@ -435,6 +500,15 @@ function help() {
   ${D}Powered by NVIDIA OpenShell · Nemotron · Agent Toolkit
   Credentials saved in ~/.nemoclaw/credentials.json (mode 600)${R}
   ${D}https://www.nvidia.com/nemoclaw${R}
+
+  ${G}Web Dashboard:${R}
+    ${B}nemoclaw gui${R}                    Launch web dashboard in browser
+    nemoclaw gui ${D}--port 3000${R}        Run dashboard on custom port
+
+  ${G}Port Configuration:${R}
+    Set ${D}NEMOCLAW_GATEWAY_PORT${R}, ${D}NEMOCLAW_DASHBOARD_PORT${R},
+    ${D}NEMOCLAW_VLLM_PORT${R}, ${D}NEMOCLAW_OLLAMA_PORT${R}, ${D}NEMOCLAW_GUI_PORT${R}
+    to override default ports and avoid conflicts.
 `);
 }
 
@@ -452,23 +526,24 @@ const [cmd, ...args] = process.argv.slice(2);
   // Global commands
   if (GLOBAL_COMMANDS.has(cmd)) {
     switch (cmd) {
-      case "onboard":     await onboard(args); break;
-      case "setup":       await setup(); break;
+      case "onboard": await onboard(args); break;
+      case "setup": await setup(); break;
       case "setup-spark": await setupSpark(); break;
-      case "deploy":      await deploy(args[0]); break;
-      case "start":       await start(); break;
-      case "stop":        stop(); break;
-      case "status":      showStatus(); break;
-      case "debug":       debug(args); break;
-      case "uninstall":   uninstall(args); break;
-      case "list":        listSandboxes(); break;
+      case "deploy": await deploy(args[0]); break;
+      case "start": await start(); break;
+      case "stop": stop(); break;
+      case "status": showStatus(); break;
+      case "debug": debug(args); break;
+      case "uninstall": uninstall(args); break;
+      case "gui": await gui(args); break;
+      case "list": listSandboxes(); break;
       case "--version":
       case "-v": {
         const pkg = require(path.join(__dirname, "..", "package.json"));
         console.log(`nemoclaw v${pkg.version}`);
         break;
       }
-      default:            help(); break;
+      default: help(); break;
     }
     return;
   }
@@ -481,12 +556,12 @@ const [cmd, ...args] = process.argv.slice(2);
     const actionArgs = args.slice(1);
 
     switch (action) {
-      case "connect":     sandboxConnect(cmd); break;
-      case "status":      sandboxStatus(cmd); break;
-      case "logs":        sandboxLogs(cmd, actionArgs.includes("--follow")); break;
-      case "policy-add":  await sandboxPolicyAdd(cmd); break;
+      case "connect": sandboxConnect(cmd); break;
+      case "status": sandboxStatus(cmd); break;
+      case "logs": sandboxLogs(cmd, actionArgs.includes("--follow")); break;
+      case "policy-add": await sandboxPolicyAdd(cmd); break;
       case "policy-list": sandboxPolicyList(cmd); break;
-      case "destroy":     await sandboxDestroy(cmd, actionArgs); break;
+      case "destroy": await sandboxDestroy(cmd, actionArgs); break;
       default:
         console.error(`  Unknown action: ${action}`);
         console.error(`  Valid actions: connect, status, logs, policy-add, policy-list, destroy`);

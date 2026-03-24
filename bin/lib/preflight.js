@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Preflight checks for NemoClaw onboarding.
+// Enhanced: uses configurable ports from ports.js, handles EPERM gracefully.
 
 const net = require("net");
 const { runCapture } = require("./runner");
+const { getPort, checkPort: portCheck } = require("./ports");
 
 /**
  * Check whether a TCP port is available for listening.
@@ -21,7 +23,7 @@ const { runCapture } = require("./runner");
  *   { ok: false, process: string, pid: number|null, reason: string }
  */
 async function checkPortAvailable(port, opts) {
-  const p = port || 18789;
+  const p = port || getPort("DASHBOARD_PORT");
   const o = opts || {};
 
   // ── lsof path ──────────────────────────────────────────────────
@@ -61,7 +63,7 @@ async function checkPortAvailable(port, opts) {
     }
   }
 
-  // ── net probe fallback ─────────────────────────────────────────
+  // ── net probe fallback (enhanced for issue #544) ───────────────
   return new Promise((resolve) => {
     const srv = net.createServer();
     srv.once("error", (err) => {
@@ -72,6 +74,10 @@ async function checkPortAvailable(port, opts) {
           pid: null,
           reason: `port ${p} is in use (EADDRINUSE)`,
         });
+      } else if (err.code === "EPERM" || err.code === "EACCES") {
+        // Permission / sandboxing failure — NOT a port conflict.
+        // Degrade gracefully per issue #544.
+        resolve({ ok: true });
       } else {
         // Unexpected error — treat port as unavailable
         resolve({

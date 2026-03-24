@@ -226,6 +226,67 @@ When the agent attempts to reach an endpoint not covered by the policy, OpenShel
 
 For step-by-step instructions, see [Customize Network Policy](https://docs.nvidia.com/nemoclaw/latest/network-policy/customize-network-policy.html). For the underlying enforcement details, see the OpenShell [Policy Schema](https://docs.nvidia.com/openshell/latest/reference/policy-schema.html) and [Sandbox Policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.html) documentation.
 
+## Web Dashboard
+
+NemoClaw includes a modern web dashboard that provides a visual interface for managing sandboxes, configuring inference, and monitoring the system.
+
+### Launch the Dashboard
+
+```bash
+nemoclaw gui
+```
+
+This opens the dashboard at `http://localhost:3000`. Use `--port` to specify a different port:
+
+```bash
+nemoclaw gui --port 8888
+```
+
+### Dashboard Features
+
+| Feature | Description |
+|---------|-------------|
+| **Dashboard** | Sandbox overview with real-time health status and quick actions |
+| **Onboard Wizard** | Step-by-step GUI for `nemoclaw onboard` (preflight, gateway, sandbox, inference, policy) |
+| **Sandbox Manager** | List, inspect, start/stop sandboxes |
+| **Agent Chat** | Web-based chat interface for OpenClaw agent interaction |
+| **Log Viewer** | Real-time log streaming with search and filtering |
+| **Policy Editor** | View and manage security policy presets |
+| **Inference Config** | Visual provider selection (Cloud/Ollama/vLLM) and model configuration |
+| **Port Manager** | Visual port assignment table with conflict detection |
+
+### Build the Dashboard
+
+```bash
+cd gui && npm install && npm run build
+```
+
+---
+
+## Port Configuration
+
+NemoClaw uses configurable ports via environment variables. This prevents conflicts with other services (Jenkins, Tomcat, Django, etc.) that may already be using the default ports.
+
+### Environment Variables
+
+| Variable | Default | Service |
+|----------|---------|---------|
+| `NEMOCLAW_GATEWAY_PORT` | 8080 | OpenShell Gateway |
+| `NEMOCLAW_DASHBOARD_PORT` | 18789 | NemoClaw Dashboard |
+| `NEMOCLAW_VLLM_PORT` | 8000 | vLLM Server |
+| `NEMOCLAW_OLLAMA_PORT` | 11434 | Ollama Server |
+| `NEMOCLAW_GUI_PORT` | 3000 | Web Dashboard |
+
+### Example: Override Ports
+
+```bash
+export NEMOCLAW_GATEWAY_PORT=9080
+export NEMOCLAW_DASHBOARD_PORT=19789
+nemoclaw onboard
+```
+
+If a configured port is in use, NemoClaw will automatically detect the conflict during preflight checks and report which process is blocking it.
+
 ---
 
 ## Key Commands
@@ -237,6 +298,7 @@ Run these on the host to set up, connect to, and manage sandboxes.
 | Command                              | Description                                            |
 |--------------------------------------|--------------------------------------------------------|
 | `nemoclaw onboard`                  | Interactive setup wizard: gateway, providers, sandbox. |
+| `nemoclaw gui`                      | Launch the web dashboard in your browser.              |
 | `nemoclaw <name> connect`            | Open an interactive shell inside the sandbox.          |
 | `openshell term`                     | Launch the OpenShell TUI for monitoring and approvals. |
 | `nemoclaw start` / `stop` / `status` | Manage auxiliary services (Telegram bridge, tunnel).   |

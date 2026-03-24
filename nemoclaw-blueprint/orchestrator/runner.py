@@ -18,6 +18,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -101,6 +102,40 @@ def validate_endpoint_url(url: str) -> str:
     return url
 
 
+_ENV_PLACEHOLDER = re.compile(r"^\$\{([A-Z_][A-Z0-9_]*)(?::-(\d+))?\}$")
+
+
+def resolve_port_value(raw: int | str, fallback: int = 18789) -> int:
+    """Resolve a port value that may be an env-var placeholder.
+
+    Supports ``${VAR:-default}`` syntax from blueprint.yaml.
+    Returns the integer port number.
+    """
+    if isinstance(raw, int):
+        return raw
+    m = _ENV_PLACEHOLDER.match(str(raw).strip())
+    if m:
+        var_name, default_str = m.group(1), m.group(2)
+        default_val = int(default_str) if default_str else fallback
+        env_val = os.environ.get(var_name)
+        if env_val:
+            try:
+                return int(env_val)
+            except ValueError:
+                return default_val
+        return default_val
+    # Plain string that looks like a number
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return fallback
+
+
+def resolve_forward_ports(raw_ports: list, fallback: int = 18789) -> list[int]:
+    """Resolve a list of port values, expanding env-var placeholders."""
+    return [resolve_port_value(p, fallback) for p in raw_ports]
+
+
 def emit_run_id() -> str:
     rid = f"nc-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     print(f"RUN_ID:{rid}", flush=True)
@@ -181,7 +216,7 @@ def action_plan(
         "sandbox": {
             "image": sandbox_cfg.get("image", "openclaw"),
             "name": sandbox_cfg.get("name", "openclaw"),
-            "forward_ports": sandbox_cfg.get("forward_ports", [18789]),
+            "forward_ports": resolve_forward_ports(sandbox_cfg.get("forward_ports", [18789])),
         },
         "inference": {
             "provider_type": inference_cfg.get("provider_type"),
@@ -229,7 +264,7 @@ def action_apply(
 
     sandbox_name: str = sandbox_cfg.get("name", "openclaw")
     sandbox_image: str = sandbox_cfg.get("image", "openclaw")
-    forward_ports: list[int] = sandbox_cfg.get("forward_ports", [18789])
+    forward_ports: list[int] = resolve_forward_ports(sandbox_cfg.get("forward_ports", [18789]))
 
     # Step 1: Create sandbox
     progress(20, "Creating OpenClaw sandbox")
