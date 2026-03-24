@@ -9,10 +9,14 @@ export function DashboardPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [updatedNames, setUpdatedNames] = useState<Set<string>>(new Set());
+    const [gatewayLoading, setGatewayLoading] = useState(false);
+    const [gatewayMessage, setGatewayMessage] = useState('');
 
+    // Sync WebSocket sandbox data into local state
     useEffect(() => {
         if (wsSandboxes.length > 0) {
             setSandboxes((prev) => {
+                // Detect which sandboxes changed status
                 const changed = new Set<string>();
                 for (const sb of wsSandboxes) {
                     const old = prev.find((p) => p.name === sb.name);
@@ -43,7 +47,29 @@ export function DashboardPage() {
         }
     }, []);
 
-    useEffect(() => { refresh(); }, [refresh]);
+    // Initial REST load as fallback
+    useEffect(() => {
+        refresh();
+    }, [refresh]);
+
+    const handleGatewayToggle = async () => {
+        setGatewayLoading(true);
+        setGatewayMessage('');
+        try {
+            if (gateway?.healthy) {
+                const result = await api.stopGateway();
+                setGatewayMessage(result.ok ? 'Gateway stopped' : 'Failed to stop gateway');
+            } else {
+                const result = await api.startGateway();
+                setGatewayMessage(result.ok ? 'Gateway started' : 'Failed to start gateway');
+            }
+        } catch (err) {
+            setGatewayMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+        }
+        setGatewayLoading(false);
+        // Clear message after 3s
+        setTimeout(() => setGatewayMessage(''), 3000);
+    };
 
     const readySandboxes = sandboxes.filter(s => s.status === 'Ready');
 
@@ -54,6 +80,7 @@ export function DashboardPage() {
                 <p>NemoClaw sandbox overview and system health</p>
             </div>
             <div className="page-body">
+                {/* Stats Row */}
                 <div className="stats-row fade-in">
                     <div className="stat-card">
                         <div className="stat-value">{sandboxes.length}</div>
@@ -65,11 +92,22 @@ export function DashboardPage() {
                         </div>
                         <div className="stat-label">Ready</div>
                     </div>
-                    <div className="stat-card">
+                    <div className="stat-card" style={{ cursor: 'pointer' }} onClick={!gatewayLoading ? handleGatewayToggle : undefined}>
                         <div className="stat-value" style={{ color: gateway?.healthy ? 'var(--nc-green)' : 'var(--nc-red)' }}>
-                            {gateway?.healthy ? '●' : '○'}
+                            {gatewayLoading ? (
+                                <div className="loading-spinner" style={{ width: '24px', height: '24px' }}></div>
+                            ) : gateway?.healthy ? '●' : '○'}
                         </div>
                         <div className="stat-label">Gateway</div>
+                        <button
+                            className={`btn btn-sm ${gateway?.healthy ? 'btn-danger' : 'btn-primary'}`}
+                            style={{ marginTop: 'var(--nc-spacing-xs)', fontSize: '0.7rem', padding: '2px 8px' }}
+                            onClick={(e) => { e.stopPropagation(); handleGatewayToggle(); }}
+                            disabled={gatewayLoading}
+                            data-testid="gateway-toggle-btn"
+                        >
+                            {gatewayLoading ? '...' : gateway?.healthy ? 'Stop' : 'Start'}
+                        </button>
                     </div>
                     <div className="stat-card">
                         <div className="stat-value" style={{ color: connected ? 'var(--nc-cyan)' : 'var(--nc-text-muted)' }}>
@@ -79,12 +117,30 @@ export function DashboardPage() {
                     </div>
                 </div>
 
+                {/* Gateway message */}
+                {gatewayMessage && (
+                    <div className="card fade-in" style={{
+                        marginBottom: 'var(--nc-spacing-md)',
+                        padding: 'var(--nc-spacing-sm) var(--nc-spacing-md)',
+                        borderColor: gatewayMessage.includes('Error') || gatewayMessage.includes('Failed') ? 'var(--nc-red)' : 'var(--nc-green)',
+                    }}>
+                        <span style={{
+                            color: gatewayMessage.includes('Error') || gatewayMessage.includes('Failed') ? 'var(--nc-red)' : 'var(--nc-green)',
+                            fontSize: '0.85rem',
+                        }}>
+                            {gatewayMessage}
+                        </span>
+                    </div>
+                )}
+
+                {/* Error */}
                 {error && (
                     <div className="card fade-in" style={{ borderColor: 'var(--nc-red)', marginBottom: 'var(--nc-spacing-lg)' }}>
                         <div style={{ color: 'var(--nc-red)' }}>⚠ {error}</div>
                     </div>
                 )}
 
+                {/* Quick Actions */}
                 <div style={{ marginBottom: 'var(--nc-spacing-xl)' }}>
                     <h3 style={{ marginBottom: 'var(--nc-spacing-md)', fontSize: '1rem' }}>Quick Actions</h3>
                     <div className="btn-group">
@@ -94,6 +150,7 @@ export function DashboardPage() {
                     </div>
                 </div>
 
+                {/* Sandbox Cards */}
                 <h3 style={{ marginBottom: 'var(--nc-spacing-md)', fontSize: '1rem' }}>Sandboxes</h3>
                 {sandboxes.length === 0 && !loading ? (
                     <div className="card fade-in" style={{ textAlign: 'center', padding: 'var(--nc-spacing-2xl)' }}>
@@ -120,9 +177,11 @@ export function DashboardPage() {
                                         {sb.status}
                                     </span>
                                 </div>
+
                                 <div style={{ fontSize: '0.8rem', color: 'var(--nc-text-secondary)', marginBottom: 'var(--nc-spacing-md)' }}>
                                     Created: {sb.created || 'unknown'}
                                 </div>
+
                                 <div className="btn-group">
                                     <a href={`/chat`} className="btn btn-primary btn-sm">💬 Chat</a>
                                     <a href={`/logs`} className="btn btn-secondary btn-sm">📋 Logs</a>
@@ -139,6 +198,7 @@ export function DashboardPage() {
                     </div>
                 )}
 
+                {/* Loading */}
                 {loading && (
                     <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--nc-spacing-2xl)' }}>
                         <div className="loading-spinner"></div>
