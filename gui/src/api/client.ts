@@ -28,6 +28,12 @@ export interface PortStatus {
     reason?: string;
 }
 
+export interface PortSource {
+    name: string;
+    port: number;
+    source: 'env' | 'config' | 'default';
+}
+
 export interface PreflightCheck {
     name: string;
     ok: boolean;
@@ -55,7 +61,20 @@ export const api = {
     getGatewayStatus: () => request<GatewayStatus>('/gateway/status'),
 
     // Ports
-    getPorts: () => request<{ ports: Record<string, number>; status: PortStatus[] }>('/ports'),
+    getPorts: () => request<{ ports: Record<string, number>; status: PortStatus[]; sources: PortSource[] }>('/ports'),
+    updatePorts: (overrides: Record<string, number>) =>
+        request<{ ok: boolean; ports: Record<string, number>; sources: PortSource[] }>('/ports', {
+            method: 'PUT',
+            body: JSON.stringify(overrides),
+        }),
+    resetPorts: () =>
+        request<{ ok: boolean; ports: Record<string, number>; sources: PortSource[] }>('/ports/reset', {
+            method: 'POST',
+        }),
+    autoResolvePorts: () =>
+        request<{ ok: boolean; ports: Record<string, number>; status: PortStatus[]; sources: PortSource[] }>('/ports/auto-resolve', {
+            method: 'POST',
+        }),
 
     // Policies
     getPolicies: () => request<{ presets: string[] }>('/policies'),

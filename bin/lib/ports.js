@@ -2,10 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Dynamic port management for NemoClaw.
-// Reads port overrides from environment variables, validates them,
-// and provides auto-detection of free ports when conflicts exist.
+// Reads port overrides from environment variables and a persistent
+// config file, validates them, and provides auto-detection of free
+// ports when conflicts exist.
 
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+// ── Config file path ─────────────────────────────────────────────
+const CONFIG_DIR = path.join(os.homedir(), ".config", "nemoclaw");
+const CONFIG_FILE = path.join(CONFIG_DIR, "ports.json");
 
 // ── Default ports ────────────────────────────────────────────────
 const DEFAULTS = {
@@ -55,18 +63,113 @@ function parsePortEnv(envKey) {
     return port;
 }
 
+// ── Persistent Config File ───────────────────────────────────────
+
+/**
+ * Load port overrides from the config file.
+ * Returns an empty object if the file does not exist or is invalid.
+ * @returns {Object<string, number>}
+ */
+function loadConfig() {
+    try {
+        if (!fs.existsSync(CONFIG_FILE)) return {};
+        const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+        const data = JSON.parse(raw);
+        // Only keep valid port entries that match known port names
+        const cleaned = {};
+        for (const [key, val] of Object.entries(data)) {
+            if (DEFAULTS.hasOwnProperty(key) && isValidPort(val)) {
+                cleaned[key] = val;
+            }
+        }
+        return cleaned;
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * Save port overrides to the config file.
+ * Only saves ports that differ from the defaults.
+ * @param {Object<string, number>} overrides - e.g. { GATEWAY_PORT: 9090 }
+ */
+function saveConfig(overrides) {
+    // Validate all entries
+    for (const [key, val] of Object.entries(overrides)) {
+        if (!DEFAULTS.hasOwnProperty(key)) {
+            throw new Error(`Unknown port name: ${key}`);
+        }
+        if (!isValidPort(val)) {
+            throw new Error(`Invalid port for ${key}: ${val}. Must be 1024–65535.`);
+        }
+    }
+    // Merge with existing config
+    const existing = loadConfig();
+    const merged = { ...existing, ...overrides };
+    // Remove entries that match defaults
+    for (const [key, val] of Object.entries(merged)) {
+        if (val === DEFAULTS[key]) {
+            delete merged[key];
+        }
+    }
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+    return merged;
+}
+
+/**
+ * Delete the config file, reverting all ports to defaults.
+ */
+function resetConfig() {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            fs.unlinkSync(CONFIG_FILE);
+        }
+    } catch {
+        // Ignore errors during cleanup
+    }
+}
+
 // ── Port Resolution ──────────────────────────────────────────────
 
 /**
  * Get the configured port for a named service.
- * Priority: env var override → default.
+ * Priority: env var override → config file → default.
  * @param {string} name - One of GATEWAY_PORT, DASHBOARD_PORT, etc.
  * @returns {number}
  */
 function getPort(name) {
     const envKey = ENV_KEYS[name];
     if (!envKey) return DEFAULTS[name] || 0;
-    return parsePortEnv(envKey) || DEFAULTS[name];
+    // 1. Environment variable (highest priority)
+    const envPort = parsePortEnv(envKey);
+    if (envPort) return envPort;
+    // 2. Config file
+    const config = loadConfig();
+    if (config[name]) return config[name];
+    // 3. Default
+    return DEFAULTS[name];
+}
+
+/**
+ * Get the source of each port's current value.
+ * @returns {Array<{name: string, port: number, source: 'env'|'config'|'default'}>}
+ */
+function getPortSources() {
+    const config = loadConfig();
+    const sources = [];
+    for (const name of Object.keys(DEFAULTS)) {
+        const envKey = ENV_KEYS[name];
+        const envPort = envKey ? parsePortEnv(envKey) : null;
+        if (envPort) {
+            sources.push({ name, port: envPort, source: "env" });
+        } else if (config[name]) {
+            sources.push({ name, port: config[name], source: "config" });
+        } else {
+            sources.push({ name, port: DEFAULTS[name], source: "default" });
+        }
+    }
+    return sources;
 }
 
 /**
@@ -185,9 +288,14 @@ async function resolveAllPorts(options = {}) {
 module.exports = {
     DEFAULTS,
     ENV_KEYS,
+    CONFIG_FILE,
     getPort,
     getAllPorts,
+    getPortSources,
     isValidPort,
+    loadConfig,
+    saveConfig,
+    resetConfig,
     checkPort,
     findFreePort,
     checkAllPorts,
