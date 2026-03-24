@@ -156,6 +156,24 @@ For example, to skip the confirmation prompt:
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash -s -- --yes
 ```
 
+### CLI Tips
+
+Every command supports `--help` to print usage, options, and examples:
+
+```bash
+nemoclaw list --help
+nemoclaw gui --help
+nemoclaw <name> destroy --help
+```
+
+Commands `list`, `status`, and `<name> policy-list` accept `--json` for scripted consumption:
+
+```bash
+nemoclaw list --json | jq '.sandboxes[].name'
+nemoclaw status --json
+nemoclaw my-assistant policy-list --json
+```
+
 <!-- end-quickstart-guide -->
 
 ---
