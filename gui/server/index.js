@@ -27,7 +27,7 @@ if (existsSync(distDir)) {
     app.use(express.static(distDir));
 }
 
-// ── Helper: run CLI command safely ───────────────────────────────
+// ── Helper: run CLI command safely ────────────────────────────────
 function runCli(cmd, opts = {}) {
     try {
         const output = execSync(cmd, {
@@ -103,21 +103,77 @@ app.get('/api/gateway/status', (req, res) => {
     res.json({ healthy, ...result });
 });
 
-// Ports
+// ── Ports CRUD ──────────────────────────────────────────────────
+
+function loadPortsModule() {
+    const portsPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'ports.js');
+    // Clear require cache so we always get fresh config reads
+    delete loadPortsModule._cache?.[portsPath];
+    // Use dynamic require for CommonJS module
+    const mod = require(portsPath);
+    return mod;
+}
+
+// Lazy-init require for CommonJS interop in ESM
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
 app.get('/api/ports', async (req, res) => {
     try {
-        // Import the ports module dynamically
-        const portsPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'ports.js');
-        // Use createRequire for CommonJS module
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const ports = require(portsPath);
-
+        const ports = loadPortsModule();
         const allPorts = ports.getAllPorts();
         const status = await ports.checkAllPorts();
-        res.json({ ports: allPorts, status });
+        const sources = ports.getPortSources();
+        res.json({ ports: allPorts, status, sources });
     } catch (err) {
-        res.json({ ports: {}, status: [], error: err.message });
+        res.json({ ports: {}, status: [], sources: [], error: err.message });
+    }
+});
+
+app.put('/api/ports', (req, res) => {
+    try {
+        const ports = loadPortsModule();
+        const overrides = req.body;
+        if (!overrides || typeof overrides !== 'object') {
+            return res.status(400).json({ ok: false, error: 'Body must be an object of port overrides' });
+        }
+        // Convert string values to numbers
+        const parsed = {};
+        for (const [key, val] of Object.entries(overrides)) {
+            parsed[key] = typeof val === 'string' ? parseInt(val, 10) : val;
+        }
+        ports.saveConfig(parsed);
+        const allPorts = ports.getAllPorts();
+        const sources = ports.getPortSources();
+        res.json({ ok: true, ports: allPorts, sources });
+    } catch (err) {
+        res.status(400).json({ ok: false, error: err.message });
+    }
+});
+
+app.post('/api/ports/reset', (req, res) => {
+    try {
+        const ports = loadPortsModule();
+        ports.resetConfig();
+        const allPorts = ports.getAllPorts();
+        const sources = ports.getPortSources();
+        res.json({ ok: true, ports: allPorts, sources });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+app.post('/api/ports/auto-resolve', async (req, res) => {
+    try {
+        const ports = loadPortsModule();
+        const resolved = await ports.resolveAllPorts({ autoResolve: true });
+        ports.saveConfig(resolved);
+        const allPorts = ports.getAllPorts();
+        const status = await ports.checkAllPorts();
+        const sources = ports.getPortSources();
+        res.json({ ok: true, ports: allPorts, status, sources });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
     }
 });
 
@@ -181,10 +237,7 @@ app.get('/api/onboard/preflight', async (req, res) => {
 
     // Port checks
     try {
-        const portsPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'ports.js');
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const ports = require(portsPath);
+        const ports = loadPortsModule();
         const portStatus = await ports.checkAllPorts();
         for (const ps of portStatus) {
             if (ps.name === 'GATEWAY_PORT' || ps.name === 'DASHBOARD_PORT') {
