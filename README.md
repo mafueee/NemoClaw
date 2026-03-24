@@ -1,4 +1,3 @@
-<!-- markdownlint-disable MD001 MD013 MD033 -->
 # NVIDIA NemoClaw: Reference Stack for Running OpenClaw in OpenShell
 
 <!-- start-badges -->
@@ -84,7 +83,7 @@ If `nemoclaw` is not found after install, run `source ~/.bashrc` (or `source ~/.
 
 When the install completes, a summary confirms the running environment:
 
-```text
+```
 ──────────────────────────────────────────────────
 Sandbox      my-assistant (Landlock + seccomp + netns)
 Model        nvidia/nemotron-3-super-120b-a12b (NVIDIA Endpoint API)
@@ -198,15 +197,19 @@ When something goes wrong, errors may originate from either NemoClaw or the Open
 
 ## Inference
 
-Inference requests from the agent never leave the sandbox directly. OpenShell intercepts every call and routes it to the NVIDIA Endpoint provider.
+Inference requests from the agent never leave the sandbox directly. OpenShell intercepts every call and routes it to the configured provider.
 
 | Provider     | Model                               | Use Case                                       |
 |--------------|--------------------------------------|-------------------------------------------------|
 | NVIDIA Endpoint | `nvidia/nemotron-3-super-120b-a12b` | Production. Requires an NVIDIA API key.         |
+| Ollama       | `llama3.3:latest`, etc.             | Local or remotely hosted Ollama server.         |
+| OpenRouter   | `anthropic/claude-sonnet-4`, etc.          | 200+ models via openrouter.ai. Requires an API key. |
+| vLLM         | Auto-detected                       | High-performance local inference server.        |
+| NIM Local    | `nvidia/nemotron-3-nano-30b-a3b`    | On-premise NVIDIA NIM container.                |
 
-Get an API key from [build.nvidia.com](https://build.nvidia.com). The `nemoclaw onboard` command prompts for this key during setup.
+Get an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). Get an OpenRouter API key from [openrouter.ai/keys](https://openrouter.ai/keys). The `nemoclaw onboard` command prompts for provider selection during setup, or use the web dashboard's Inference Config page.
 
-Local inference options such as Ollama and vLLM are still experimental. On macOS, they also depend on OpenShell host-routing support in addition to the local service itself being reachable on the host.
+Ollama supports connecting to remote servers — set the endpoint URL in the dashboard or via environment variable. vLLM and NIM local options require a running server on the configured endpoint.
 
 ---
 
@@ -268,12 +271,12 @@ nemoclaw gui --port 8888
 | **Dashboard** | Sandbox overview with real-time health status and quick actions |
 | **🔔 Live Updates** | WebSocket-powered real-time sandbox status changes pushed to the dashboard |
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
-| **Onboard Wizard** | Step-by-step GUI for `nemoclaw onboard` (preflight, gateway, sandbox, inference, policy) |
+| **Onboard Wizard** | Step-by-step GUI for `nemoclaw onboard` (preflight, gateway, sandbox, inference with all providers, policy) |
 | **Sandbox Manager** | List, inspect, start/stop sandboxes with live status badges |
 | **Agent Chat** | Web-based chat interface for OpenClaw agent interaction |
 | **Log Viewer** | Real-time log streaming with search and filtering |
 | **Policy Editor** | View and manage security policy presets |
-| **Inference Config** | Visual provider selection (Cloud/Ollama/vLLM) and model configuration |
+| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
 
 ### WebSocket Live Updates
@@ -296,7 +299,6 @@ The dashboard adapts to three breakpoint tiers:
 | ≤1024px | Small desktop | Adjusted card grids and provider layouts |
 
 On mobile/tablet:
-
 - A **hamburger menu** (☰) appears in a fixed top bar, toggling the sidebar with a dark backdrop overlay.
 - Navigation links close the sidebar automatically.
 - Tables scroll horizontally and form controls stack vertically for comfortable touch interaction.
@@ -329,7 +331,7 @@ Ports locked by environment variables are shown with a 🔒 icon and cannot be e
 ### Environment Variables
 
 | Variable | Default | Service |
-|----------|---------|---------|
+|----------|---------|---------
 | `NEMOCLAW_GATEWAY_PORT` | 8080 | OpenShell Gateway |
 | `NEMOCLAW_DASHBOARD_PORT` | 18789 | NemoClaw Dashboard |
 | `NEMOCLAW_VLLM_PORT` | 8000 | vLLM Server |
