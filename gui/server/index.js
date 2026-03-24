@@ -27,7 +27,7 @@ if (existsSync(distDir)) {
     app.use(express.static(distDir));
 }
 
-// ── Helper: run CLI command safely ──────────────────────────────
+// ── Helper: run CLI command safely ───────────────────────────────
 function runCli(cmd, opts = {}) {
     try {
         const output = execSync(cmd, {
@@ -211,24 +211,95 @@ app.get('/api/onboard/preflight', async (req, res) => {
     res.json({ checks });
 });
 
-// ── WebSocket for real-time updates ─────────────────────────────
+// ── WebSocket for real-time updates ───────────────────────────────
+
+// Shared state for change detection
+let lastSandboxJson = '';
+let cachedSandboxes = [];
+let cachedGatewayHealthy = null;
+
+function parseSandboxList(output) {
+    const lines = output.split('\n').filter(l => l.trim());
+    const sandboxes = [];
+    for (const line of lines) {
+        const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        const cols = clean.split(/\s+/);
+        if (cols.length >= 2 && !clean.startsWith('NAME') && !clean.startsWith('─')) {
+            sandboxes.push({
+                name: cols[0],
+                image: cols[1] || '',
+                created: cols[2] || '',
+                status: cols[cols.length - 1] || 'Unknown',
+            });
+        }
+    }
+    return sandboxes;
+}
+
+function broadcast(data) {
+    const msg = JSON.stringify(data);
+    for (const client of wss.clients) {
+        if (client.readyState === client.OPEN) {
+            client.send(msg);
+        }
+    }
+}
+
+function sendCurrentState(ws) {
+    if (ws.readyState !== ws.OPEN) return;
+    const gw = runCli('openshell status 2>&1', { timeout: 5000 });
+    const gwHealthy = gw.ok && gw.output.includes('Connected');
+    ws.send(JSON.stringify({
+        type: 'status',
+        gateway: { healthy: gwHealthy },
+        sandboxes: cachedSandboxes,
+        timestamp: new Date().toISOString(),
+    }));
+}
+
+// Global polling loop — runs once for all clients
+const pollInterval = setInterval(() => {
+    if (wss.clients.size === 0) return;
+
+    // Poll sandbox list
+    const sbResult = runCli('openshell sandbox list 2>/dev/null', { timeout: 10000 });
+    if (sbResult.ok) {
+        const sandboxes = parseSandboxList(sbResult.output);
+        const json = JSON.stringify(sandboxes);
+        if (json !== lastSandboxJson) {
+            lastSandboxJson = json;
+            cachedSandboxes = sandboxes;
+            broadcast({ type: 'sandbox:list', sandboxes });
+        }
+    }
+
+    // Poll gateway
+    const gw = runCli('openshell status 2>&1', { timeout: 5000 });
+    const gwHealthy = gw.ok && gw.output.includes('Connected');
+    if (gwHealthy !== cachedGatewayHealthy) {
+        cachedGatewayHealthy = gwHealthy;
+    }
+
+    // Always send periodic status with both gateway + sandboxes
+    broadcast({
+        type: 'status',
+        gateway: { healthy: gwHealthy },
+        sandboxes: cachedSandboxes,
+        timestamp: new Date().toISOString(),
+    });
+}, 5000);
 
 wss.on('connection', (ws) => {
-    // Send initial status
     ws.send(JSON.stringify({ type: 'connected' }));
 
-    // Periodic status updates every 5 seconds
-    const interval = setInterval(() => {
-        if (ws.readyState !== ws.OPEN) return;
-        const gw = runCli('openshell status 2>&1', { timeout: 5000 });
-        ws.send(JSON.stringify({
-            type: 'status',
-            gateway: { healthy: gw.ok && gw.output.includes('Connected') },
-            timestamp: new Date().toISOString(),
-        }));
-    }, 5000);
-
-    ws.on('close', () => clearInterval(interval));
+    ws.on('message', (raw) => {
+        try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'subscribe') {
+                sendCurrentState(ws);
+            }
+        } catch { /* ignore */ }
+    });
 });
 
 // ── SPA fallback ────────────────────────────────────────────────
