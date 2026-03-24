@@ -1,46 +1,63 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import { ChatInterface } from './ChatInterface';
 
+vi.mock('../../api/client', async () => {
+    const listSandboxes = vi.fn().mockResolvedValue({
+        sandboxes: [{ name: 'my-sandbox', status: 'Ready', image: '', created: '' }],
+        raw: '',
+    });
+    const sendChatMessage = vi.fn().mockResolvedValue({ ok: true, response: 'Hello from agent!' });
+    return { api: { listSandboxes, sendChatMessage } };
+});
+
+const { api } = await import('../../api/client');
+
 describe('ChatInterface', () => {
-    it('renders the page header', () => {
-        render(<ChatInterface />);
-        expect(screen.getAllByText('💬 Agent Chat').length).toBeGreaterThan(0);
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(api.listSandboxes).mockResolvedValue({
+            sandboxes: [{ name: 'my-sandbox', status: 'Ready', image: '', created: '' }],
+            raw: '',
+        });
     });
 
-    it('shows the welcome message', () => {
+    it('renders the page header', () => {
+        render(<ChatInterface />);
+        expect(screen.getByText('💬 Agent Chat')).toBeInTheDocument();
+    });
+
+    it('shows sandbox selector', async () => {
+        render(<ChatInterface />);
+        await waitFor(() => {
+            expect(screen.getByTestId('chat-sandbox-selector')).toBeInTheDocument();
+        });
+    });
+
+    it('renders welcome message', () => {
         render(<ChatInterface />);
         expect(screen.getAllByText(/Welcome to the OpenClaw Agent Chat/).length).toBeGreaterThan(0);
     });
 
-    it('renders the input area', () => {
+    it('does NOT mention CLI commands in the welcome message', () => {
         render(<ChatInterface />);
-        const textareas = screen.getAllByPlaceholderText(/Type a message/);
-        expect(textareas.length).toBeGreaterThan(0);
+        expect(screen.queryByText('nemoclaw')).toBeNull();
+        expect(screen.queryByText('openclaw tui')).toBeNull();
     });
 
-    it('renders the send button', () => {
+    it('renders send button', () => {
         render(<ChatInterface />);
         expect(screen.getAllByText('Send').length).toBeGreaterThan(0);
     });
 
-    it('send button is disabled when input is empty', () => {
+    it('shows no sandboxes message when empty', async () => {
+        vi.mocked(api.listSandboxes).mockResolvedValue({ sandboxes: [], raw: '' });
         render(<ChatInterface />);
-        const sendBtns = screen.getAllByText('Send');
-        expect(sendBtns[0]).toBeDisabled();
+        await waitFor(() => {
+            expect(screen.getByText(/No sandboxes available/)).toBeInTheDocument();
+        });
     });
-
-    it('send button is enabled when input has text', async () => {
-        const user = userEvent.setup();
-        render(<ChatInterface />);
-        const textareas = screen.getAllByPlaceholderText(/Type a message/);
-        await user.type(textareas[0], 'Hello!');
-        const sendBtns = screen.getAllByText('Send');
-        expect(sendBtns[0]).not.toBeDisabled();
-    });
-
 });

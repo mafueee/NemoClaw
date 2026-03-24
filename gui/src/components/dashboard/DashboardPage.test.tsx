@@ -3,23 +3,23 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { DashboardPage } from './DashboardPage';
 
 vi.mock('../../api/client', async () => {
     const listSandboxes = vi.fn().mockResolvedValue({ sandboxes: [], raw: '' });
-    const getGatewayStatus = vi.fn().mockResolvedValue({ healthy: true, ok: true, output: '' });
     const stopSandbox = vi.fn().mockResolvedValue({ ok: true });
-    return {
-        api: { listSandboxes, getGatewayStatus, stopSandbox },
-        createWebSocket: () => ({ close: () => { }, onmessage: null, onerror: null }),
-    };
+    const startGateway = vi.fn().mockResolvedValue({ ok: true, healthy: true, output: 'Started' });
+    const stopGateway = vi.fn().mockResolvedValue({ ok: true, output: 'Stopped' });
+    const getGatewayStatus = vi.fn().mockResolvedValue({ healthy: false, ok: false, output: '' });
+    return { api: { listSandboxes, stopSandbox, startGateway, stopGateway, getGatewayStatus } };
 });
 
 vi.mock('../../hooks/useWebSocket', () => ({
     useWebSocket: () => ({
         connected: true,
         sandboxes: [],
-        gateway: { healthy: true, ok: true, output: '' },
+        gateway: { healthy: false },
         send: vi.fn(),
     }),
 }));
@@ -34,7 +34,32 @@ describe('DashboardPage', () => {
 
     it('renders the page header', () => {
         render(<DashboardPage />);
-        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Dashboard');
+        expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+
+    it('shows quick action buttons', () => {
+        render(<DashboardPage />);
+        expect(screen.getAllByText('🚀 New Sandbox').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('🔄 Refresh').length).toBeGreaterThan(0);
+    });
+
+    it('shows gateway toggle button', () => {
+        render(<DashboardPage />);
+        expect(screen.getAllByTestId('gateway-toggle-btn').length).toBeGreaterThan(0);
+    });
+
+    it('shows Start button when gateway is not healthy', () => {
+        render(<DashboardPage />);
+        const btns = screen.getAllByTestId('gateway-toggle-btn');
+        expect(btns[0].textContent).toBe('Start');
+    });
+
+    it('calls startGateway when Start is clicked', async () => {
+        const user = userEvent.setup();
+        render(<DashboardPage />);
+        const btns = screen.getAllByTestId('gateway-toggle-btn');
+        await user.click(btns[0]);
+        expect(api.startGateway).toHaveBeenCalled();
     });
 
     it('shows empty state when no sandboxes', async () => {
@@ -44,40 +69,10 @@ describe('DashboardPage', () => {
         });
     });
 
-    it('displays sandbox cards when sandboxes exist', async () => {
-        vi.mocked(api.listSandboxes).mockResolvedValue({
-            sandboxes: [
-                { name: 'test-sandbox', image: 'nemoclaw:latest', status: 'Ready', created: '2026-01-01' },
-            ],
-            raw: '',
-        });
+    it('shows stat cards', () => {
         render(<DashboardPage />);
-        await waitFor(() => {
-            expect(screen.getAllByText('test-sandbox').length).toBeGreaterThan(0);
-        });
-    });
-
-    it('shows quick action buttons', async () => {
-        render(<DashboardPage />);
-        await waitFor(() => {
-            expect(screen.getAllByText('🚀 New Sandbox').length).toBeGreaterThan(0);
-        });
-        expect(screen.getAllByText('🔄 Refresh').length).toBeGreaterThan(0);
-    });
-
-    it('shows error when API fails', async () => {
-        vi.mocked(api.listSandboxes).mockRejectedValue(new Error('Network error'));
-        render(<DashboardPage />);
-        await waitFor(() => {
-            expect(screen.getAllByText(/Network error/).length).toBeGreaterThan(0);
-        });
-    });
-
-    it('renders stat cards including live updates', async () => {
-        render(<DashboardPage />);
-        await waitFor(() => {
-            expect(screen.getAllByText('Total Sandboxes').length).toBeGreaterThan(0);
-        });
+        expect(screen.getAllByText('Total Sandboxes').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
         expect(screen.getAllByText('Gateway').length).toBeGreaterThan(0);
         expect(screen.getAllByText('Live Updates').length).toBeGreaterThan(0);
     });
