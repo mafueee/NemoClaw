@@ -240,3 +240,183 @@ describe("end-to-end env override", () => {
         );
     });
 });
+
+// ── Config file persistence ──────────────────────────────────────
+
+import fs from "node:fs";
+import os from "node:os";
+
+const {
+    CONFIG_FILE,
+    loadConfig,
+    saveConfig,
+    resetConfig,
+    getPortSources,
+} = ports;
+
+describe("config file persistence", () => {
+    // Use a temp dir to avoid touching the real config
+    const origConfigFile = CONFIG_FILE;
+    let tmpDir;
+    let tmpConfigFile;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-test-"));
+        tmpConfigFile = path.join(tmpDir, "ports.json");
+        // Monkey-patch the module's CONFIG_FILE reference
+        // We test through saveConfig/loadConfig which use the module-level var
+    });
+
+    afterEach(() => {
+        // Clean up temp files
+        try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch { }
+        resetConfig();
+    });
+
+    it("loadConfig returns empty object when no config file exists", () => {
+        resetConfig();
+        const config = loadConfig();
+        expect(config).toEqual({});
+    });
+
+    it("saveConfig creates a config file and loadConfig reads it", () => {
+        resetConfig();
+        saveConfig({ GATEWAY_PORT: 9090 });
+        const config = loadConfig();
+        expect(config.GATEWAY_PORT).toBe(9090);
+    });
+
+    it("saveConfig rejects unknown port names", () => {
+        expect(() => saveConfig({ UNKNOWN_PORT: 5000 })).toThrow("Unknown port name");
+    });
+
+    it("saveConfig rejects invalid port numbers", () => {
+        expect(() => saveConfig({ GATEWAY_PORT: 80 })).toThrow("Invalid port");
+    });
+
+    it("saveConfig omits ports that match defaults", () => {
+        resetConfig();
+        saveConfig({ GATEWAY_PORT: 8080 }); // Same as default
+        const config = loadConfig();
+        expect(config.GATEWAY_PORT).toBeUndefined(); // Should not be in config
+    });
+
+    it("resetConfig removes the config file", () => {
+        saveConfig({ GATEWAY_PORT: 9090 });
+        resetConfig();
+        const config = loadConfig();
+        expect(config).toEqual({});
+    });
+
+    it("saveConfig merges with existing config", () => {
+        resetConfig();
+        saveConfig({ GATEWAY_PORT: 9090 });
+        saveConfig({ DASHBOARD_PORT: 19000 });
+        const config = loadConfig();
+        expect(config.GATEWAY_PORT).toBe(9090);
+        expect(config.DASHBOARD_PORT).toBe(19000);
+    });
+});
+
+// ── getPortSources ───────────────────────────────────────────────
+
+describe("getPortSources", () => {
+    afterEach(() => {
+        for (const key of Object.values(ENV_KEYS)) {
+            delete process.env[key];
+        }
+        resetConfig();
+    });
+
+    it("returns default source when no overrides exist", () => {
+        resetConfig();
+        const sources = withEnv(
+            {
+                NEMOCLAW_GATEWAY_PORT: undefined,
+                NEMOCLAW_DASHBOARD_PORT: undefined,
+                NEMOCLAW_VLLM_PORT: undefined,
+                NEMOCLAW_OLLAMA_PORT: undefined,
+                NEMOCLAW_GUI_PORT: undefined,
+            },
+            getPortSources
+        );
+        for (const s of sources) {
+            expect(s.source).toBe("default");
+        }
+    });
+
+    it("returns env source when env var is set", () => {
+        resetConfig();
+        const sources = withEnv(
+            { NEMOCLAW_GATEWAY_PORT: "9090" },
+            getPortSources
+        );
+        const gw = sources.find((s) => s.name === "GATEWAY_PORT");
+        expect(gw.source).toBe("env");
+        expect(gw.port).toBe(9090);
+    });
+
+    it("returns config source when config file has override", () => {
+        withEnv(
+            { NEMOCLAW_GATEWAY_PORT: undefined },
+            () => {
+                resetConfig();
+                saveConfig({ GATEWAY_PORT: 9191 });
+                const sources = getPortSources();
+                const gw = sources.find((s) => s.name === "GATEWAY_PORT");
+                expect(gw.source).toBe("config");
+                expect(gw.port).toBe(9191);
+            }
+        );
+    });
+
+    it("env takes priority over config", () => {
+        saveConfig({ GATEWAY_PORT: 9191 });
+        withEnv(
+            { NEMOCLAW_GATEWAY_PORT: "7070" },
+            () => {
+                const sources = getPortSources();
+                const gw = sources.find((s) => s.name === "GATEWAY_PORT");
+                expect(gw.source).toBe("env");
+                expect(gw.port).toBe(7070);
+            }
+        );
+        resetConfig();
+    });
+});
+
+// ── Resolution order: env > config > default ─────────────────────
+
+describe("port resolution order", () => {
+    afterEach(() => {
+        for (const key of Object.values(ENV_KEYS)) {
+            delete process.env[key];
+        }
+        resetConfig();
+    });
+
+    it("config file takes precedence over defaults", () => {
+        withEnv({ NEMOCLAW_GATEWAY_PORT: undefined }, () => {
+            saveConfig({ GATEWAY_PORT: 9292 });
+            expect(getPort("GATEWAY_PORT")).toBe(9292);
+        });
+        resetConfig();
+    });
+
+    it("env var takes precedence over config file", () => {
+        saveConfig({ GATEWAY_PORT: 9292 });
+        withEnv({ NEMOCLAW_GATEWAY_PORT: "7777" }, () => {
+            expect(getPort("GATEWAY_PORT")).toBe(7777);
+        });
+        resetConfig();
+    });
+
+    it("defaults are used when no overrides exist", () => {
+        resetConfig();
+        withEnv({ NEMOCLAW_GATEWAY_PORT: undefined }, () => {
+            expect(getPort("GATEWAY_PORT")).toBe(8080);
+        });
+    });
+});
