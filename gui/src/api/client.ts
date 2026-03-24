@@ -47,6 +47,14 @@ export interface GatewayStatus {
     output: string;
 }
 
+// Policy preset with status
+export interface PolicyPreset {
+    name: string;
+    file: string;
+    description: string;
+    applied: boolean;
+}
+
 // API Methods
 export const api = {
     health: () => request<{ status: string; version: string }>('/health'),
@@ -56,9 +64,12 @@ export const api = {
     getSandboxStatus: (name: string) => request<{ name: string; ok: boolean; output: string }>(`/sandboxes/${name}/status`),
     startSandbox: (name: string) => request<{ ok: boolean }>(`/sandboxes/${name}/start`, { method: 'POST' }),
     stopSandbox: (name: string) => request<{ ok: boolean }>(`/sandboxes/${name}/stop`, { method: 'POST' }),
+    destroySandbox: (name: string) => request<{ ok: boolean; message: string }>(`/sandboxes/${name}/destroy`, { method: 'POST' }),
 
     // Gateway
     getGatewayStatus: () => request<GatewayStatus>('/gateway/status'),
+    startGateway: () => request<{ ok: boolean; healthy: boolean; output: string }>('/gateway/start', { method: 'POST' }),
+    stopGateway: () => request<{ ok: boolean; output: string }>('/gateway/stop', { method: 'POST' }),
 
     // Ports
     getPorts: () => request<{ ports: Record<string, number>; status: PortStatus[]; sources: PortSource[] }>('/ports'),
@@ -78,10 +89,52 @@ export const api = {
 
     // Policies
     getPolicies: () => request<{ presets: string[] }>('/policies'),
+    getPresetsWithStatus: (sandboxName?: string) =>
+        request<{ ok: boolean; presets: PolicyPreset[] }>(`/policies/presets${sandboxName ? `?sandboxName=${encodeURIComponent(sandboxName)}` : ''}`),
+    applyPolicy: (sandboxName: string, presetName: string) =>
+        request<{ ok: boolean; message: string }>('/policies/apply', {
+            method: 'POST',
+            body: JSON.stringify({ sandboxName, presetName }),
+        }),
+    removePolicy: (sandboxName: string, presetName: string) =>
+        request<{ ok: boolean; message: string }>('/policies/remove', {
+            method: 'POST',
+            body: JSON.stringify({ sandboxName, presetName }),
+        }),
 
     // Onboarding
     getPreflightChecks: () => request<{ checks: PreflightCheck[] }>('/onboard/preflight'),
+
+    // Chat
+    sendChatMessage: (sandboxName: string, message: string, sessionId?: string) =>
+        request<{ ok: boolean; response: string; error?: string }>('/chat/message', {
+            method: 'POST',
+            body: JSON.stringify({ sandboxName, message, sessionId }),
+        }),
+
+    // Inference
+    getInferenceConfig: () => request<{ config: InferenceConfigData }>('/inference'),
+    saveInferenceConfig: (data: Partial<InferenceConfigData>) =>
+        request<{ ok: boolean; config: InferenceConfigData }>('/inference', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
+    testInferenceEndpoint: (endpoint: string, apiKey?: string) =>
+        request<{ ok: boolean; status?: number; models?: string[]; error?: string }>('/inference/test', {
+            method: 'POST',
+            body: JSON.stringify({ endpoint, apiKey }),
+        }),
 };
+
+export interface InferenceConfigData {
+    endpointType?: string;
+    endpointUrl?: string;
+    model?: string;
+    credentialEnv?: string;
+    provider?: string;
+    providerLabel?: string;
+    onboardedAt?: string;
+}
 
 // WebSocket connection
 export function createWebSocket(onMessage: (data: unknown) => void): WebSocket {
