@@ -96,11 +96,45 @@ app.post('/api/sandboxes/:name/stop', (req, res) => {
     res.json({ name, ...result });
 });
 
+app.post('/api/sandboxes/:name/destroy', (req, res) => {
+    const { name } = req.params;
+    // Validate sandbox name
+    if (!name || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
+        return res.status(400).json({ ok: false, error: 'Invalid sandbox name' });
+    }
+    try {
+        // Stop NIM container
+        runCli(`docker stop nemoclaw-nim-${name} 2>/dev/null || true`, { timeout: 15000 });
+        runCli(`docker rm nemoclaw-nim-${name} 2>/dev/null || true`, { timeout: 10000 });
+        // Delete sandbox via openshell
+        runCli(`openshell sandbox delete "${name}" 2>/dev/null || true`, { timeout: 30000 });
+        // Remove from registry
+        try {
+            const registry = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'registry.js'));
+            registry.removeSandbox(name);
+        } catch { /* registry may not be available */ }
+        res.json({ ok: true, message: `Sandbox '${name}' destroyed` });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 // Gateway
 app.get('/api/gateway/status', (req, res) => {
     const result = runCli('openshell status 2>&1');
     const healthy = result.ok && result.output.includes('Connected');
     res.json({ healthy, ...result });
+});
+
+app.post('/api/gateway/start', (req, res) => {
+    const result = runCli(`openshell gateway start --name nemoclaw 2>&1`, { timeout: 60000 });
+    const healthy = result.ok && !result.output.includes('error');
+    res.json({ ok: result.ok, healthy, output: result.output });
+});
+
+app.post('/api/gateway/stop', (req, res) => {
+    const result = runCli(`openshell gateway stop 2>&1`, { timeout: 30000 });
+    res.json({ ok: result.ok, output: result.output });
 });
 
 // ── Ports CRUD ──────────────────────────────────────────────────
@@ -185,6 +219,60 @@ app.get('/api/policies', (req, res) => {
         ? result.output.split('\n').filter(f => f.endsWith('.yaml')).map(f => f.replace('.yaml', ''))
         : [];
     res.json({ presets });
+});
+
+// Policies — presets with descriptions and applied status
+app.get('/api/policies/presets', (req, res) => {
+    const { sandboxName } = req.query;
+    try {
+        const policies = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js'));
+        const allPresets = policies.listPresets();
+        let applied = [];
+        if (sandboxName) {
+            applied = policies.getAppliedPresets(sandboxName);
+        }
+        const presets = allPresets.map(p => ({
+            name: p.name,
+            file: p.file,
+            description: p.description,
+            applied: applied.includes(p.name),
+        }));
+        res.json({ ok: true, presets });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message, presets: [] });
+    }
+});
+
+app.post('/api/policies/apply', (req, res) => {
+    const { sandboxName, presetName } = req.body;
+    if (!sandboxName || !presetName) {
+        return res.status(400).json({ ok: false, error: 'sandboxName and presetName are required' });
+    }
+    try {
+        const policies = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js'));
+        const result = policies.applyPreset(sandboxName, presetName);
+        res.json({ ok: result !== false, message: result !== false ? `Applied '${presetName}' to '${sandboxName}'` : 'Failed to apply preset' });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+app.post('/api/policies/remove', (req, res) => {
+    const { sandboxName, presetName } = req.body;
+    if (!sandboxName || !presetName) {
+        return res.status(400).json({ ok: false, error: 'sandboxName and presetName are required' });
+    }
+    try {
+        const registry = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'registry.js'));
+        const sandbox = registry.getSandbox(sandboxName);
+        if (sandbox) {
+            const pols = (sandbox.policies || []).filter(p => p !== presetName);
+            registry.updateSandbox(sandboxName, { policies: pols });
+        }
+        res.json({ ok: true, message: `Removed '${presetName}' from '${sandboxName}'` });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 // ── Inference Config CRUD ───────────────────────────────────────
@@ -329,6 +417,254 @@ app.get('/api/sandboxes/:name/logs', (req, res) => {
     req.on('close', () => {
         proc.kill();
     });
+});
+
+// ── Onboard Execution (SSE) ─────────────────────────────────────
+
+// Map GUI provider keys to CLI-compatible NEMOCLAW_PROVIDER values.
+// The CLI only supports: cloud, ollama, vllm, nim.
+// GUI-extra providers (openrouter, gemini) route through 'cloud' in the CLI
+// and get their specific inference config saved separately.
+function mapProviderToCliEnv(guiProvider) {
+    const mapping = {
+        'cloud': 'cloud',
+        'ollama': 'ollama',
+        'openrouter': 'cloud',   // CLI treats as cloud; we save inference config after
+        'gemini': 'cloud',       // CLI treats as cloud; we save inference config after
+        'vllm': 'vllm',
+        'nim-local': 'nim',
+    };
+    return mapping[guiProvider] || 'cloud';
+}
+
+// Map GUI provider key to the env var name for the API key
+function getApiKeyEnvVar(guiProvider) {
+    const mapping = {
+        'cloud': 'NVIDIA_API_KEY',
+        'ollama': 'OLLAMA_API_KEY',
+        'openrouter': 'OPENROUTER_API_KEY',
+        'gemini': 'GEMINI_API_KEY',
+        'vllm': 'OPENAI_API_KEY',
+        'nim-local': 'NIM_API_KEY',
+    };
+    return mapping[guiProvider] || 'NVIDIA_API_KEY';
+}
+
+app.post('/api/onboard/execute', (req, res) => {
+    const { sandboxName, provider, model, apiKey, endpoint } = req.body;
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+    });
+
+    const sendEvent = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const safeName = (sandboxName || 'my-assistant').toLowerCase().replace(/[^a-z0-9-]/g, '');
+    const cliProvider = mapProviderToCliEnv(provider || 'cloud');
+    const apiKeyEnvVar = getApiKeyEnvVar(provider || 'cloud');
+
+    // Build environment for the CLI subprocess
+    const cliEnv = {
+        ...process.env,
+        NEMOCLAW_NON_INTERACTIVE: '1',
+        NEMOCLAW_SANDBOX_NAME: safeName,
+        NEMOCLAW_PROVIDER: cliProvider,
+    };
+
+    // Set model (except for providers whose CLI path auto-detects)
+    if (model) {
+        cliEnv.NEMOCLAW_MODEL = model;
+    }
+
+    // Set API key in the env var the CLI expects
+    if (apiKey) {
+        cliEnv[apiKeyEnvVar] = apiKey;
+        // For cloud-mapped providers, also set NVIDIA_API_KEY if provider is cloud
+        if (cliProvider === 'cloud' && apiKeyEnvVar !== 'NVIDIA_API_KEY') {
+            // The CLI cloud path requires NVIDIA_API_KEY; for openrouter/gemini
+            // we still set their own key and handle inference config separately.
+            // Set a placeholder for NVIDIA_API_KEY if it's not already set
+            // so the CLI doesn't block asking for it.
+            if (!cliEnv.NVIDIA_API_KEY) {
+                cliEnv.NVIDIA_API_KEY = apiKey;
+            }
+        }
+    }
+
+    // Track current step for progress parsing
+    let currentCliStep = '';
+    let lastStepSent = '';
+    let cliSucceeded = false;
+    let cliProcess = null;
+
+    // Parse CLI output lines into SSE events
+    function parseCliLine(rawLine) {
+        const line = rawLine.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        if (!line) return;
+
+        // Step markers from onboard.js: [1/7], [2/7], etc.
+        const stepMatch = line.match(/^\[(\d+)\/7\]\s*(.+)/);
+        if (stepMatch) {
+            const stepNum = parseInt(stepMatch[1], 10);
+            const stepMsg = stepMatch[2];
+            const stepNames = ['preflight', 'gateway', 'sandbox', 'nim', 'inference', 'openclaw', 'policy'];
+            currentCliStep = stepNames[stepNum - 1] || `step-${stepNum}`;
+
+            // Send previous step as complete if it didn't error
+            if (lastStepSent && lastStepSent !== currentCliStep) {
+                sendEvent({ step: lastStepSent, status: 'complete', message: `${lastStepSent} complete` });
+            }
+            lastStepSent = currentCliStep;
+            sendEvent({ step: currentCliStep, status: 'running', message: stepMsg });
+            return;
+        }
+
+        // Success markers
+        if (line.startsWith('✓') || line.includes('✓')) {
+            const msg = line.replace(/^✓\s*/, '');
+            if (currentCliStep) {
+                sendEvent({ step: currentCliStep, status: 'complete', message: msg });
+            }
+            return;
+        }
+
+        // Error markers
+        if (line.startsWith('!!') || line.includes('Failed') || line.includes('Error') || line.includes('error')) {
+            if (currentCliStep) {
+                sendEvent({ step: currentCliStep, status: 'error', message: line });
+            }
+            return;
+        }
+
+        // Progress messages — forward interesting ones
+        if (line.includes('Creating sandbox') || line.includes('Waiting for') ||
+            line.includes('Building image') || line.includes('Pulling') ||
+            line.includes('Starting') || line.includes('Configuring') ||
+            line.includes('Priming') || line.includes('Setting up') ||
+            line.includes('Patching') || line.includes('Installing')) {
+            if (currentCliStep) {
+                sendEvent({ step: currentCliStep, status: 'running', message: line });
+            }
+        }
+    }
+
+    // Spawn the CLI process asynchronously
+    sendEvent({ step: 'deploy', status: 'running', message: 'Starting deployment...' });
+
+    const cliCmd = join(NEMOCLAW_ROOT, 'bin', 'nemoclaw.js');
+    cliProcess = spawn('node', [cliCmd, 'onboard', '--non-interactive'], {
+        cwd: NEMOCLAW_ROOT,
+        env: cliEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let buffer = '';
+    let errBuffer = '';
+
+    cliProcess.stdout.on('data', (data) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+            parseCliLine(line);
+        }
+    });
+
+    cliProcess.stderr.on('data', (data) => {
+        errBuffer += data.toString();
+        const lines = errBuffer.split('\n');
+        errBuffer = lines.pop() || '';
+        for (const line of lines) {
+            parseCliLine(line);
+        }
+    });
+
+    cliProcess.on('error', (err) => {
+        sendEvent({ step: 'deploy', status: 'error', message: `Failed to start deployment: ${err.message}` });
+        sendEvent({ done: true, success: false });
+        res.end();
+    });
+
+    cliProcess.on('close', (code) => {
+        // Flush remaining buffers
+        if (buffer.trim()) parseCliLine(buffer);
+        if (errBuffer.trim()) parseCliLine(errBuffer);
+
+        cliSucceeded = code === 0;
+
+        if (cliSucceeded) {
+            // Mark last step complete
+            if (lastStepSent) {
+                sendEvent({ step: lastStepSent, status: 'complete', message: `${lastStepSent} complete` });
+            }
+
+            // Save inference config for GUI-specific providers (openrouter, gemini)
+            // that the CLI doesn't natively handle
+            if (['openrouter', 'gemini', 'ollama'].includes(provider) || endpoint) {
+                try {
+                    const inferenceConfig = {
+                        endpointType: provider || 'cloud',
+                        endpointUrl: endpoint || '',
+                        model: model || '',
+                        provider: provider || 'cloud',
+                        providerLabel: provider || 'cloud',
+                        onboardedAt: new Date().toISOString(),
+                    };
+                    if (apiKey) {
+                        inferenceConfig.credentialEnv = apiKeyEnvVar;
+                    }
+                    saveInferenceConfigToDisk(inferenceConfig);
+                } catch { /* inference config save is best-effort */ }
+            }
+
+            sendEvent({ step: 'complete', status: 'complete', message: `Sandbox '${safeName}' deployed successfully` });
+        } else {
+            sendEvent({ step: 'deploy', status: 'error', message: `Deployment failed (exit code ${code})` });
+        }
+
+        sendEvent({ done: true, success: cliSucceeded, sandboxName: safeName });
+        res.end();
+    });
+
+    req.on('close', () => {
+        // Client disconnected — kill the CLI process if still running
+        if (cliProcess && !cliProcess.killed) {
+            cliProcess.kill('SIGTERM');
+        }
+    });
+});
+
+// ── Chat Proxy ──────────────────────────────────────────────────
+
+app.post('/api/chat/message', (req, res) => {
+    const { sandboxName, message, sessionId } = req.body;
+    if (!sandboxName || !message) {
+        return res.status(400).json({ ok: false, error: 'sandboxName and message required' });
+    }
+    const safeSession = (sessionId || 'gui-session').replace(/[^a-zA-Z0-9-_]/g, '');
+    const safeName = sandboxName.replace(/[^a-z0-9-]/g, '');
+    // Escape double quotes in the message
+    const safeMsg = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+
+    const result = runCli(
+        `openshell sandbox exec ${safeName} -- openclaw agent --agent main --local -m "${safeMsg}" --session-id ${safeSession} 2>&1`,
+        { timeout: 120000 }
+    );
+
+    if (result.ok) {
+        res.json({ ok: true, response: result.output });
+    } else {
+        // Even on CLI "failure", there may be useful output
+        res.json({
+            ok: false,
+            response: result.output || 'No response from agent. Is the sandbox running and OpenClaw installed?',
+            error: result.code ? `Exit code ${result.code}` : 'Agent command failed',
+        });
+    }
 });
 
 // Onboard status (for the wizard)
