@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD001 MD013 MD033 -->
 # NVIDIA NemoClaw: Reference Stack for Running OpenClaw in OpenShell
 
 <!-- start-badges -->
@@ -83,7 +84,7 @@ If `nemoclaw` is not found after install, run `source ~/.bashrc` (or `source ~/.
 
 When the install completes, a summary confirms the running environment:
 
-```
+```text
 ──────────────────────────────────────────────────
 Sandbox      my-assistant (Landlock + seccomp + netns)
 Model        nvidia/nemotron-3-super-120b-a12b (NVIDIA Endpoint API)
@@ -214,7 +215,7 @@ Local inference options such as Ollama and vLLM are still experimental. On macOS
 The sandbox starts with a default policy that controls network egress and filesystem access:
 
 | Layer      | What it protects                                    | When it applies             |
-|------------|-----------------------------------------------------|-------------- --------------|
+|------------|-----------------------------------------------------|-----------------------------|
 | Network    | Blocks unauthorized outbound connections.           | Hot-reloadable at runtime.  |
 | Filesystem | Prevents reads/writes outside `/sandbox` and `/tmp`.| Locked at sandbox creation. |
 | Process    | Blocks privilege escalation and dangerous syscalls. | Locked at sandbox creation. |
@@ -273,7 +274,7 @@ nemoclaw gui --port 8888
 | **Log Viewer** | Real-time log streaming with search and filtering |
 | **Policy Editor** | View and manage security policy presets |
 | **Inference Config** | Visual provider selection (Cloud/Ollama/vLLM) and model configuration |
-| **Port Manager** | Visual port assignment table with conflict detection |
+| **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
 
 ### WebSocket Live Updates
 
@@ -295,6 +296,7 @@ The dashboard adapts to three breakpoint tiers:
 | ≤1024px | Small desktop | Adjusted card grids and provider layouts |
 
 On mobile/tablet:
+
 - A **hamburger menu** (☰) appears in a fixed top bar, toggling the sidebar with a dark backdrop overlay.
 - Navigation links close the sidebar automatically.
 - Tables scroll horizontally and form controls stack vertically for comfortable touch interaction.
@@ -309,7 +311,20 @@ cd gui && npm install && npm run build
 
 ## Port Configuration
 
-NemoClaw uses configurable ports via environment variables. This prevents conflicts with other services (Jenkins, Tomcat, Django, etc.) that may already be using the default ports.
+Ports are resolved in order: **Environment variable** → **Config file** → **Default**.
+
+### GUI Port Management
+
+The web dashboard includes a full port manager at `http://localhost:3000/ports`:
+
+- **Inline editing** — click any port value to change it directly
+- **Source badges** — see whether each port comes from an env var, saved config, or default
+- **Save / Reset** — persist changes to `~/.config/nemoclaw/ports.json` or reset to defaults
+- **Auto-resolve** — one click to find free ports for any conflicts
+- **Validation** — real-time checks for range (1024–65535) and duplicates
+- **Restart reminders** — banners remind you to restart services after saving
+
+Ports locked by environment variables are shown with a 🔒 icon and cannot be edited from the GUI.
 
 ### Environment Variables
 
