@@ -44,7 +44,6 @@ export function PortManager() {
                 <p>Manage and monitor port assignments to avoid conflicts</p>
             </div>
             <div className="page-body">
-                {/* Status Banner */}
                 <div className={`card fade-in`} style={{
                     marginBottom: 'var(--nc-spacing-lg)',
                     borderColor: allOk ? 'rgba(118, 185, 0, 0.3)' : 'rgba(255, 165, 2, 0.3)',
@@ -57,48 +56,48 @@ export function PortManager() {
                     </div>
                 </div>
 
-                {/* Port Table */}
                 <div className="card fade-in">
                     {loading ? (
                         <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--nc-spacing-lg)' }}>
                             <div className="loading-spinner"></div>
                         </div>
                     ) : (
-                        <table className="port-table">
-                            <thead>
-                                <tr>
-                                    <th>Service</th>
-                                    <th>Port</th>
-                                    <th>Status</th>
-                                    <th>Environment Variable</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {status.map((ps) => (
-                                    <tr key={ps.name} className="fade-in">
-                                        <td style={{ fontWeight: 500 }}>{labels[ps.name] || ps.name}</td>
-                                        <td><span className="port-number">{ps.port}</span></td>
-                                        <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <span className={`status-dot ${ps.available ? 'ready' : 'error'}`}></span>
-                                                <span style={{ fontSize: '0.8rem', color: ps.available ? 'var(--nc-green)' : 'var(--nc-red)' }}>
-                                                    {ps.available ? 'Available' : ps.reason || 'In use'}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <code style={{ fontSize: '0.75rem', color: 'var(--nc-text-muted)' }}>
-                                                {envVarNames[ps.name] || '—'}
-                                            </code>
-                                        </td>
+                        <div className="port-table-wrapper">
+                            <table className="port-table">
+                                <thead>
+                                    <tr>
+                                        <th>Service</th>
+                                        <th>Port</th>
+                                        <th>Status</th>
+                                        <th>Environment Variable</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {status.map((ps) => (
+                                        <tr key={ps.name} className="fade-in">
+                                            <td style={{ fontWeight: 500 }}>{labels[ps.name] || ps.name}</td>
+                                            <td><span className="port-number">{ps.port}</span></td>
+                                            <td>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    <span className={`status-dot ${ps.available ? 'ready' : 'error'}`}></span>
+                                                    <span style={{ fontSize: '0.8rem', color: ps.available ? 'var(--nc-green)' : 'var(--nc-red)' }}>
+                                                        {ps.available ? 'Available' : ps.reason || 'In use'}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <code style={{ fontSize: '0.75rem', color: 'var(--nc-text-muted)' }}>
+                                                    {envVarNames[ps.name] || '—'}
+                                                </code>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
                 </div>
 
-                {/* Help Text */}
                 <div className="card fade-in" style={{ marginTop: 'var(--nc-spacing-lg)' }}>
                     <h4 style={{ marginBottom: 'var(--nc-spacing-sm)' }}>Override Ports</h4>
                     <p style={{ color: 'var(--nc-text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--nc-spacing-md)' }}>

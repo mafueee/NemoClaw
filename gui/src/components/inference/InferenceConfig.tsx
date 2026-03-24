@@ -48,9 +48,8 @@ export function InferenceConfig() {
                 <p>Configure your AI model provider and settings</p>
             </div>
             <div className="page-body">
-                {/* Provider Selection */}
                 <h4 style={{ marginBottom: 'var(--nc-spacing-md)' }}>Provider</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--nc-spacing-md)', marginBottom: 'var(--nc-spacing-xl)' }}>
+                <div className="inference-provider-grid">
                     {providers.map((p) => (
                         <div key={p.key}
                             className="card fade-in"
@@ -68,7 +67,6 @@ export function InferenceConfig() {
                     ))}
                 </div>
 
-                {/* Configuration */}
                 <div className="card fade-in">
                     <h4 style={{ marginBottom: 'var(--nc-spacing-lg)' }}>{currentProvider.title} Settings</h4>
 

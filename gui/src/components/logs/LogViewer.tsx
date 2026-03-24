@@ -57,7 +57,7 @@ export function LogViewer() {
     const getLineClass = (line: string) => {
         if (/error|fail|panic/i.test(line)) return 'error';
         if (/warn/i.test(line)) return 'warn';
-        if (/info|ready|✓/i.test(line)) return 'info';
+        if (/info|ready|\u2713/i.test(line)) return 'info';
         return '';
     };
 
@@ -68,10 +68,9 @@ export function LogViewer() {
                 <p>Stream and search sandbox logs in real-time</p>
             </div>
             <div className="page-body">
-                <div style={{ display: 'flex', gap: 'var(--nc-spacing-sm)', marginBottom: 'var(--nc-spacing-lg)', flexWrap: 'wrap' }}>
+                <div className="log-controls">
                     <select
                         className="input"
-                        style={{ width: '200px' }}
                         value={selectedSandbox}
                         onChange={(e) => { stopStreaming(); setSelectedSandbox(e.target.value); }}
                     >
@@ -82,7 +81,6 @@ export function LogViewer() {
                     </select>
                     <input
                         className="input"
-                        style={{ width: '250px' }}
                         value={filter}
                         onChange={(e) => setFilter(e.target.value)}
                         placeholder="🔍 Filter logs..."
