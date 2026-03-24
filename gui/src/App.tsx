@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { DashboardPage } from './components/dashboard/DashboardPage';
 import { OnboardWizard } from './components/onboard/OnboardWizard';
 import { SandboxManager } from './components/sandbox/SandboxManager';
@@ -8,6 +8,24 @@ import { InferenceConfig } from './components/inference/InferenceConfig';
 import { PortManager } from './components/ports/PortManager';
 import { LogViewer } from './components/logs/LogViewer';
 import { ChatInterface } from './components/chat/ChatInterface';
+import { ClawList } from './components/claws/ClawList';
+import { ClawDetail } from './components/claws/ClawDetail';
+import { ClawCreate } from './components/claws/ClawCreate';
+
+// Wrapper components to pass navigation to claw pages
+function ClawListPage() {
+    const navigate = useNavigate();
+    return <ClawList onNavigate={(path) => navigate(path)} />;
+}
+function ClawDetailPage() {
+    const { id } = useParams();
+    const navigate = useNavigate();
+    return <ClawDetail clawId={id!} onNavigate={(path) => navigate(path)} />;
+}
+function ClawCreatePage() {
+    const navigate = useNavigate();
+    return <ClawCreate onNavigate={(path) => navigate(path)} />;
+}
 
 export default function App() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -54,6 +72,16 @@ export default function App() {
                             🚀 Onboard
                         </NavLink>
 
+                        <div className="nav-section-title">Claws</div>
+                        <NavLink to="/claws" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            🐾 All Claws
+                        </NavLink>
+                        <NavLink to="/claws/new" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            ✨ New Claw
+                        </NavLink>
+
                         <div className="nav-section-title">Sandboxes</div>
                         <NavLink to="/sandboxes" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
                             onClick={closeSidebar}>
@@ -95,6 +123,9 @@ export default function App() {
                     <Routes>
                         <Route path="/" element={<DashboardPage />} />
                         <Route path="/onboard" element={<OnboardWizard />} />
+                        <Route path="/claws" element={<ClawListPage />} />
+                        <Route path="/claws/new" element={<ClawCreatePage />} />
+                        <Route path="/claws/:id" element={<ClawDetailPage />} />
                         <Route path="/sandboxes" element={<SandboxManager />} />
                         <Route path="/policies" element={<PolicyEditor />} />
                         <Route path="/inference" element={<InferenceConfig />} />
