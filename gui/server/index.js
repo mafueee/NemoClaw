@@ -187,6 +187,113 @@ app.get('/api/policies', (req, res) => {
     res.json({ presets });
 });
 
+// ── Inference Config CRUD ───────────────────────────────────────
+
+import { readFileSync, writeFileSync, existsSync as fsExists, mkdirSync } from 'fs';
+import { homedir } from 'os';
+
+const NEMOCLAW_CONFIG_DIR = join(homedir(), '.nemoclaw');
+const INFERENCE_CONFIG_FILE = join(NEMOCLAW_CONFIG_DIR, 'config.json');
+
+function ensureNemoClawConfigDir() {
+    if (!fsExists(NEMOCLAW_CONFIG_DIR)) {
+        mkdirSync(NEMOCLAW_CONFIG_DIR, { recursive: true });
+    }
+}
+
+function loadInferenceConfig() {
+    ensureNemoClawConfigDir();
+    if (!fsExists(INFERENCE_CONFIG_FILE)) {
+        return null;
+    }
+    try {
+        return JSON.parse(readFileSync(INFERENCE_CONFIG_FILE, 'utf-8'));
+    } catch {
+        return null;
+    }
+}
+
+function saveInferenceConfigToDisk(config) {
+    ensureNemoClawConfigDir();
+    writeFileSync(INFERENCE_CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+app.get('/api/inference', (req, res) => {
+    const config = loadInferenceConfig();
+    res.json({ config: config || {} });
+});
+
+app.put('/api/inference', (req, res) => {
+    try {
+        const { provider, model, endpointUrl, credentialEnv, apiKey } = req.body;
+        if (!provider) {
+            return res.status(400).json({ ok: false, error: 'provider is required' });
+        }
+
+        const existing = loadInferenceConfig() || {};
+        const updated = {
+            ...existing,
+            endpointType: provider,
+            endpointUrl: endpointUrl || existing.endpointUrl || '',
+            model: model || existing.model || '',
+            credentialEnv: credentialEnv || existing.credentialEnv || '',
+            provider,
+            providerLabel: provider,
+            onboardedAt: new Date().toISOString(),
+        };
+
+        // If an API key value is provided, set it as env var for the current process
+        if (apiKey) {
+            const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
+            process.env[envVar] = apiKey;
+        }
+
+        saveInferenceConfigToDisk(updated);
+        res.json({ ok: true, config: updated });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+app.post('/api/inference/test', async (req, res) => {
+    try {
+        const { endpoint, apiKey } = req.body;
+        if (!endpoint) {
+            return res.status(400).json({ ok: false, error: 'endpoint is required' });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (apiKey) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+            // Try /models endpoint (standard OpenAI-compatible)
+            const modelsUrl = endpoint.replace(/\/+$/, '') + '/models';
+            const response = await fetch(modelsUrl, {
+                headers,
+                signal: controller.signal,
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                const data = await response.json();
+                const models = data.data?.map(m => m.id) || [];
+                res.json({ ok: true, status: response.status, models: models.slice(0, 20) });
+            } else {
+                res.json({ ok: false, status: response.status, error: `HTTP ${response.status}` });
+            }
+        } catch (fetchErr) {
+            clearTimeout(timeout);
+            res.json({ ok: false, error: fetchErr.message || 'Connection failed' });
+        }
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 // Logs (Server-Sent Events)
 app.get('/api/sandboxes/:name/logs', (req, res) => {
     const { name } = req.params;
