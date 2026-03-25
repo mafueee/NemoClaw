@@ -11,6 +11,11 @@ import { ChatInterface } from './components/chat/ChatInterface';
 import { ClawList } from './components/claws/ClawList';
 import { ClawDetail } from './components/claws/ClawDetail';
 import { ClawCreate } from './components/claws/ClawCreate';
+import { CustomImageBuilder } from './components/images/CustomImageBuilder';
+import { DenialDashboard } from './components/denials/DenialDashboard';
+import { GatewayControlPanel } from './components/gateway/GatewayControlPanel';
+import { GatewayPage } from './components/gateway/GatewayPage';
+import { useWebSocket } from './hooks/useWebSocket';
 
 // Wrapper components to pass navigation to claw pages
 function ClawListPage() {
@@ -29,6 +34,7 @@ function ClawCreatePage() {
 
 export default function App() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const { gateway } = useWebSocket();
 
     const closeSidebar = () => setSidebarOpen(false);
 
@@ -71,6 +77,15 @@ export default function App() {
                             onClick={closeSidebar}>
                             🚀 Onboard
                         </NavLink>
+                        <NavLink to="/gateway" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                ⚡ Gateway
+                                <span className={`status-dot ${gateway?.healthy ? 'ready' : 'error'}`}
+                                      style={{ width: '8px', height: '8px' }}
+                                      data-testid="sidebar-gateway-dot" />
+                            </span>
+                        </NavLink>
 
                         <div className="nav-section-title">Claws</div>
                         <NavLink to="/claws" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
@@ -109,6 +124,14 @@ export default function App() {
                             onClick={closeSidebar}>
                             🔌 Ports
                         </NavLink>
+                        <NavLink to="/images" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            🐳 Images
+                        </NavLink>
+                        <NavLink to="/denials" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            ⚖️ Denials
+                        </NavLink>
                     </nav>
 
                     <div style={{ padding: 'var(--nc-spacing-md)', borderTop: '1px solid var(--nc-border)' }}>
@@ -120,9 +143,11 @@ export default function App() {
 
                 {/* Main content */}
                 <main className="main-content">
+                    <GatewayControlPanel gateway={gateway} />
                     <Routes>
                         <Route path="/" element={<DashboardPage />} />
                         <Route path="/onboard" element={<OnboardWizard />} />
+                        <Route path="/gateway" element={<GatewayPage />} />
                         <Route path="/claws" element={<ClawListPage />} />
                         <Route path="/claws/new" element={<ClawCreatePage />} />
                         <Route path="/claws/:id" element={<ClawDetailPage />} />
@@ -132,6 +157,8 @@ export default function App() {
                         <Route path="/ports" element={<PortManager />} />
                         <Route path="/logs" element={<LogViewer />} />
                         <Route path="/chat" element={<ChatInterface />} />
+                        <Route path="/images" element={<CustomImageBuilder />} />
+                        <Route path="/denials" element={<DenialDashboard />} />
                     </Routes>
                 </main>
             </div>
