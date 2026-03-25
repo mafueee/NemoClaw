@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
+import * as grpcClient from '../lib/grpcClient.js';
 
 const NEMOCLAW_DIR = join(homedir(), '.nemoclaw');
 const CLAWS_FILE = join(NEMOCLAW_DIR, 'claws.json');
@@ -54,14 +55,13 @@ function runCli(cmd, opts = {}) {
     }
 }
 
-/** Parse `openshell sandbox list` output into structured objects */
 function parseSandboxList(output) {
     const lines = output.split('\n').filter(l => l.trim());
     const sandboxes = [];
     for (const line of lines) {
         const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
         const cols = clean.split(/\s+/);
-        if (cols.length >= 2 && !clean.startsWith('NAME') && !clean.startsWith('─')) {
+        if (cols.length >= 2 && !clean.startsWith('NAME') && !clean.startsWith('\u2500')) {
             sandboxes.push({
                 name: cols[0],
                 image: cols[1] || '',
@@ -73,20 +73,30 @@ function parseSandboxList(output) {
     return sandboxes;
 }
 
-/** Get live sandbox statuses from openshell */
-function getLiveSandboxes() {
-    const result = runCli('openshell sandbox list 2>/dev/null');
-    if (!result.ok) return [];
-    return parseSandboxList(result.output);
+/** Get live sandbox statuses \u2014 gRPC native with CLI fallback */
+async function getLiveSandboxes() {
+    try {
+        const resp = await grpcClient.listSandboxes();
+        return (resp.sandboxes || []).map(grpcClient.sandboxToDto);
+    } catch {
+        const result = runCli('openshell sandbox list 2>/dev/null');
+        if (!result.ok) return [];
+        return parseSandboxList(result.output);
+    }
 }
 
-/** Get detailed info for a single sandbox */
-function getSandboxDetail(name) {
-    const result = runCli(`openshell sandbox get "${name}" 2>/dev/null`);
-    return { ok: result.ok, output: result.output };
+/** Get detailed info for a single sandbox \u2014 gRPC native with CLI fallback */
+async function getSandboxDetail(name) {
+    try {
+        const resp = await grpcClient.getSandbox(name);
+        const dto = grpcClient.sandboxToDto(resp.sandbox);
+        return { ok: true, output: JSON.stringify(dto, null, 2), data: dto };
+    } catch {
+        const result = runCli(`openshell sandbox get "${name}" 2>/dev/null`);
+        return { ok: result.ok, output: result.output };
+    }
 }
 
-/** List registered gateways */
 function listGateways() {
     const result = runCli('openshell gateway select 2>/dev/null');
     if (!result.ok) return [];
@@ -94,9 +104,9 @@ function listGateways() {
     const gateways = [];
     for (const line of lines) {
         const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
-        if (!clean || clean.startsWith('NAME') || clean.startsWith('─')) continue;
-        const isActive = clean.includes('*') || clean.includes('→');
-        const name = clean.replace(/[*→]/g, '').split(/\s+/)[0];
+        if (!clean || clean.startsWith('NAME') || clean.startsWith('\u2500')) continue;
+        const isActive = clean.includes('*') || clean.includes('\u2192');
+        const name = clean.replace(/[*\u2192]/g, '').split(/\s+/)[0];
         if (name) {
             gateways.push({ name, active: isActive });
         }
@@ -106,10 +116,9 @@ function listGateways() {
 
 // ── CRUD Operations ────────────────────────────────────────────
 
-/** List all claws with live status cross-referenced from openshell */
-export function listClaws() {
+export async function listClaws() {
     const claws = loadClaws();
-    const liveSandboxes = getLiveSandboxes();
+    const liveSandboxes = await getLiveSandboxes();
     const liveMap = new Map(liveSandboxes.map(s => [s.name, s]));
 
     return claws.map(claw => {
@@ -117,64 +126,50 @@ export function listClaws() {
         return {
             ...claw,
             sandboxStatus: live ? live.status : 'not-found',
-            status: live
-                ? mapSandboxStatus(live.status)
-                : 'stopped',
+            status: live ? mapSandboxStatus(live.status) : 'stopped',
         };
     });
 }
 
-/** Get a single claw by ID with enriched status */
-export function getClaw(id) {
+export async function getClaw(id) {
     const claws = loadClaws();
     const claw = claws.find(c => c.id === id);
     if (!claw) return null;
 
-    const liveSandboxes = getLiveSandboxes();
+    const liveSandboxes = await getLiveSandboxes();
     const live = liveSandboxes.find(s => s.name === claw.sandboxName);
-    const detail = getSandboxDetail(claw.sandboxName);
+    const detail = await getSandboxDetail(claw.sandboxName);
 
     return {
         ...claw,
         sandboxStatus: live ? live.status : 'not-found',
         status: live ? mapSandboxStatus(live.status) : 'stopped',
         detail: detail.ok ? detail.output : null,
+        detailData: detail.data || null,
     };
 }
 
-/** Register a new claw instance */
 export function registerClaw({ id, sandboxName, gatewayName, config }) {
     const claws = loadClaws();
-
-    // Don't duplicate
     if (claws.find(c => c.id === id)) {
         throw new Error(`Claw '${id}' already exists`);
     }
-
     const claw = {
-        id,
-        sandboxName: sandboxName || id,
+        id, sandboxName: sandboxName || id,
         gatewayName: gatewayName || 'nemoclaw',
         createdAt: new Date().toISOString(),
-        lastConnected: null,
-        config: config || {},
+        lastConnected: null, config: config || {},
         status: 'creating',
     };
-
     claws.push(claw);
     saveClaws(claws);
     return claw;
 }
 
-/** Update an existing claw's metadata or config */
 export function updateClaw(id, updates) {
     const claws = loadClaws();
     const idx = claws.findIndex(c => c.id === id);
-    if (idx === -1) {
-        throw new Error(`Claw '${id}' not found`);
-    }
-
-    // Merge updates
+    if (idx === -1) throw new Error(`Claw '${id}' not found`);
     if (updates.config) {
         claws[idx].config = { ...claws[idx].config, ...updates.config };
         delete updates.config;
@@ -184,54 +179,38 @@ export function updateClaw(id, updates) {
     return claws[idx];
 }
 
-/** Remove a claw from the registry */
 export function removeClaw(id) {
     const claws = loadClaws();
     const idx = claws.findIndex(c => c.id === id);
-    if (idx === -1) {
-        throw new Error(`Claw '${id}' not found`);
-    }
+    if (idx === -1) throw new Error(`Claw '${id}' not found`);
     const removed = claws.splice(idx, 1)[0];
     saveClaws(claws);
     return removed;
 }
 
-/** Mark a claw as recently connected */
 export function touchClaw(id) {
     return updateClaw(id, { lastConnected: new Date().toISOString() });
 }
 
-/**
- * Sync the registry with actual OpenShell sandbox list.
- * Discovers new sandboxes not in the registry (orphans) and
- * marks registry entries whose sandbox no longer exists.
- */
-export function syncWithOpenShell() {
+export async function syncWithOpenShell() {
     const claws = loadClaws();
-    const liveSandboxes = getLiveSandboxes();
+    const liveSandboxes = await getLiveSandboxes();
     const registeredNames = new Set(claws.map(c => c.sandboxName));
 
-    // Discover orphaned sandboxes (exist in OpenShell but not in claw registry)
     const orphans = liveSandboxes
         .filter(s => !registeredNames.has(s.name))
         .map(s => ({
-            id: s.name,
-            sandboxName: s.name,
-            gatewayName: 'nemoclaw',
-            createdAt: s.created || new Date().toISOString(),
-            lastConnected: null,
-            config: {},
-            status: mapSandboxStatus(s.status),
-            discovered: true,
+            id: s.name, sandboxName: s.name, gatewayName: 'nemoclaw',
+            createdAt: s.createdAt || s.created || new Date().toISOString(),
+            lastConnected: null, config: {},
+            status: mapSandboxStatus(s.status), discovered: true,
         }));
 
-    // Auto-register orphans
     if (orphans.length > 0) {
         claws.push(...orphans);
         saveClaws(claws);
     }
 
-    // Return enriched list
     const liveMap = new Map(liveSandboxes.map(s => [s.name, s]));
     return claws.map(claw => {
         const live = liveMap.get(claw.sandboxName);
@@ -243,7 +222,6 @@ export function syncWithOpenShell() {
     });
 }
 
-/** Get available gateways */
 export function getGateways() {
     return listGateways();
 }
