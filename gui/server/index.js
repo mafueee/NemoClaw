@@ -336,9 +336,11 @@ app.put('/api/inference', (req, res) => {
         };
 
         // If an API key value is provided, set it as env var for the current process
+        // and persist it in the config file so it survives server restarts
         if (apiKey) {
             const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
             process.env[envVar] = apiKey;
+            updated._apiKey = apiKey;
         }
 
         saveInferenceConfigToDisk(updated);
@@ -663,6 +665,37 @@ app.post('/api/chat/message', (req, res) => {
     // Escape single quotes in the message for safe shell embedding
     const safeMsg = message.replace(/'/g, "'\\''");
 
+    // Load inference config so we can pass credentials into the sandbox shell.
+    // The `openclaw agent --local` flag requires API keys in the shell's env.
+    const inferCfg = loadInferenceConfig() || {};
+    const envLines = [];
+
+    // Resolve the API key: prefer process.env, fall back to config file's _apiKey
+    const credEnv = inferCfg.credentialEnv;
+    const apiKey = (credEnv && process.env[credEnv]) || inferCfg._apiKey || '';
+
+    if (!apiKey && inferCfg.provider && inferCfg.provider !== 'ollama') {
+        return res.json({
+            ok: false,
+            response: `Inference API key not configured. Please go to the Inference Config page and save your ${inferCfg.provider} API key, then try again.`,
+            error: 'Missing API key',
+        });
+    }
+
+    // Map provider config to the env vars openclaw expects
+    if (apiKey) {
+        if (credEnv) {
+            envLines.push(`export ${credEnv}='${apiKey}'`);
+        }
+        envLines.push(`export OPENAI_API_KEY='${apiKey}'`);
+    }
+    if (inferCfg.endpointUrl) {
+        envLines.push(`export OPENAI_BASE_URL='${inferCfg.endpointUrl}'`);
+    }
+    if (inferCfg.model) {
+        envLines.push(`export OPENCLAW_MODEL='${inferCfg.model}'`);
+    }
+
     // `openshell sandbox exec` does not exist.
     // Use `openshell sandbox connect <name>` and pipe the openclaw command
     // through stdin. The connect command opens an SSH shell into the sandbox;
@@ -678,8 +711,10 @@ app.post('/api/chat/message', (req, res) => {
         stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    // Write the agent command into the sandbox shell's stdin, then close stdin
-    const cmd = `openclaw agent --agent main --local -m '${safeMsg}' --session-id ${safeSession} 2>&1; exit\n`;
+    // Build the shell command: set env vars, then run the agent, then exit
+    const envSetup = envLines.length > 0 ? envLines.join('; ') + '; ' : '';
+    const modelFlag = inferCfg.model ? ` --model '${inferCfg.model}'` : '';
+    const cmd = `${envSetup}openclaw agent --agent main --local${modelFlag} -m '${safeMsg}' --session-id ${safeSession} 2>&1; exit\n`;
     proc.stdin.write(cmd);
     proc.stdin.end();
 
@@ -703,11 +738,37 @@ app.post('/api/chat/message', (req, res) => {
         finished = true;
         clearTimeout(timeout);
 
-        // Strip ANSI escape codes and shell prompt noise from the output
+        // Comprehensive output cleaning:
+        // 1. Strip ALL terminal escape sequences (ANSI colors, bracketed paste, cursor control)
+        // 2. Remove command echo, node warnings, shell prompts, 'exit' line
+        // 3. Extract the meaningful agent response
         const clean = stdout
-            .replace(/\x1b\[[0-9;]*m/g, '')
+            // Strip all ANSI/terminal escape sequences (colors, cursor, bracketed paste mode, etc.)
+            .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+            .replace(/\x1b\][^\x07]*\x07/g, '')   // OSC sequences
+            .replace(/\r/g, '')                     // carriage returns
             .split('\n')
-            .filter(l => !l.match(/^\s*(sandbox@|bash-|~\$|\$)\s*$/))
+            .filter(l => {
+                const t = l.trim();
+                if (!t) return false;
+                // Remove command echo (the command we piped in)
+                if (t.startsWith('openclaw agent')) return false;
+                if (t === 'exit') return false;
+                // Remove shell prompts
+                if (/^\s*(sandbox@|bash-|\$|~\$)/.test(t)) return false;
+                // Remove node warnings
+                if (t.includes('[UNDICI-') || t.includes('Warning:') || t.includes('--trace-warnings')) return false;
+                // Remove OpenClaw banner decorative line
+                if (t.startsWith('🦞') || t.startsWith('\u{1F99E}')) return false;
+                if (/^\s+I've seen your|^\s+OpenClaw|^\s+Finally,/.test(t)) return false;
+                // Remove bracketed paste artifacts
+                if (/^\[(\?2004[hl]|[0-9;]*[A-Z])/.test(t)) return false;
+                // Remove export/env-setup command echo
+                if (t.startsWith('export ')) return false;
+                // Remove log-style lines with timestamps (e.g. "00:09:42 [agent/embedded]")
+                if (/^\d{2}:\d{2}:\d{2}\s+\[agent\//.test(t)) return false;
+                return true;
+            })
             .join('\n')
             .trim();
 
