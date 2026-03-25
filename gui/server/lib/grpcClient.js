@@ -8,7 +8,7 @@
 //   - openshell.inference.v1.Inference — cluster inference config + bundles
 //
 // Connection uses the same mTLS credentials that the CLI stores in
-// ~/.config/openshell/clusters/<name>/mtls/.
+// ~/.config/openshell/gateways/<name>/mtls/.
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -39,14 +39,14 @@ const protoDescriptor = grpc.loadPackageDefinition(packageDefinition);
 const OpenShellService = protoDescriptor.openshell.v1.OpenShell;
 const InferenceService = protoDescriptor.openshell.inference.v1.Inference;
 
-// ── mTLS Credential Resolution ─────────────────────────────────
+// ── mTLS Credential Resolution ───────────────────────────────
 
 const OPENSHELL_CONFIG_DIR = join(homedir(), '.config', 'openshell');
-const ACTIVE_CLUSTER_FILE = join(OPENSHELL_CONFIG_DIR, 'active_cluster');
+const ACTIVE_CLUSTER_FILE = join(OPENSHELL_CONFIG_DIR, 'active_gateway');
 
 /**
  * Resolve the active OpenShell cluster name.
- * Priority: OPENSHELL_GATEWAY env → active_cluster file.
+ * Priority: OPENSHELL_GATEWAY env → active_gateway file.
  */
 function resolveActiveCluster() {
     if (process.env.OPENSHELL_GATEWAY) {
@@ -63,7 +63,7 @@ function resolveActiveCluster() {
  * Load cluster metadata JSON to get the gateway endpoint URL.
  */
 function loadClusterMetadata(clusterName) {
-    const metaPath = join(OPENSHELL_CONFIG_DIR, `${clusterName}_metadata.json`);
+    const metaPath = join(OPENSHELL_CONFIG_DIR, 'gateways', clusterName, 'metadata.json');
     try {
         return JSON.parse(readFileSync(metaPath, 'utf-8'));
     } catch {
@@ -76,7 +76,7 @@ function loadClusterMetadata(clusterName) {
  * Returns { rootCert, clientCert, clientKey } or null.
  */
 function loadMtlsCerts(clusterName) {
-    const mtlsDir = join(OPENSHELL_CONFIG_DIR, 'clusters', clusterName, 'mtls');
+    const mtlsDir = join(OPENSHELL_CONFIG_DIR, 'gateways', clusterName, 'mtls');
     const caPath = join(mtlsDir, 'ca.crt');
     const certPath = join(mtlsDir, 'tls.crt');
     const keyPath = join(mtlsDir, 'tls.key');
@@ -92,7 +92,7 @@ function loadMtlsCerts(clusterName) {
     };
 }
 
-// ── gRPC Channel Management ────────────────────────────────────
+// ── gRPC Channel Management ──────────────────────────────────
 
 let _openShellClient = null;
 let _inferenceClient = null;
@@ -182,7 +182,7 @@ export function resetGrpcClients() {
     _clusterName = null;
 }
 
-// ── Promise Wrappers ────────────────────────────────────────────
+// ── Promise Wrappers ────────────────────────────────────────
 
 /** Wrap a gRPC unary call in a Promise. */
 function unary(client, method, request = {}, timeoutMs = 15000) {
@@ -198,7 +198,7 @@ function unary(client, method, request = {}, timeoutMs = 15000) {
     });
 }
 
-// ── OpenShell Service Methods ───────────────────────────────────
+// ── OpenShell Service Methods ─────────────────────────────────
 
 /**
  * Check gateway health via gRPC Health RPC.
@@ -318,7 +318,7 @@ export async function getSandboxLogs(sandboxId, options = {}) {
     });
 }
 
-// ── Provider Methods ────────────────────────────────────────────
+// ── Provider Methods ────────────────────────────────────────
 
 export async function listProviders(limit = 100, offset = 0) {
     const clients = getGrpcClients();
@@ -350,7 +350,7 @@ export async function deleteProvider(name) {
     return unary(clients.openShell, 'deleteProvider', { name });
 }
 
-// ── Inference Methods ───────────────────────────────────────────
+// ── Inference Methods ───────────────────────────────────────
 
 /**
  * Get current cluster inference configuration.
@@ -386,7 +386,7 @@ export async function getInferenceBundle() {
     return unary(clients.inference, 'getInferenceBundle', {});
 }
 
-// ── Policy / Config Methods ─────────────────────────────────────
+// ── Policy / Config Methods ─────────────────────────────────
 
 /**
  * Get sandbox settings (policy + config).
@@ -466,7 +466,17 @@ export async function rejectDraftChunk(name, chunkId, reason = '') {
     return unary(clients.openShell, 'rejectDraftChunk', { name, chunkId, reason });
 }
 
-// ── Helpers ─────────────────────────────────────────────────────
+/**
+ * Get decision history for a sandbox's draft policy.
+ * Returns { entries: DraftHistoryEntry[] }.
+ */
+export async function getDraftHistory(name) {
+    const clients = getGrpcClients();
+    if (!clients) throw new Error('No gateway connection available');
+    return unary(clients.openShell, 'getDraftHistory', { name });
+}
+
+// ── Helpers ─────────────────────────────────────────────────
 
 /** Map SandboxPhase proto enum to human-readable status. */
 export function mapPhaseToStatus(phase) {
