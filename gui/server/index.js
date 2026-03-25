@@ -9,7 +9,7 @@ import { dirname, join } from 'path';
 import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import clawRoutes from './routes/claws.js';
-import { listClaws } from './services/clawManager.js';
+import { listClaws, registerClaw } from './services/clawManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -617,24 +617,36 @@ app.post('/api/onboard/execute', (req, res) => {
                 sendEvent({ step: lastStepSent, status: 'complete', message: `${lastStepSent} complete` });
             }
 
-            // Save inference config for GUI-specific providers (openrouter, gemini)
-            // that the CLI doesn't natively handle
-            if (['openrouter', 'gemini', 'ollama'].includes(provider) || endpoint) {
-                try {
-                    const inferenceConfig = {
-                        endpointType: provider || 'cloud',
-                        endpointUrl: endpoint || '',
-                        model: model || '',
+            // Save inference config (always, not just for specific providers)
+            try {
+                const inferenceConfig = {
+                    endpointType: provider || 'cloud',
+                    endpointUrl: endpoint || '',
+                    model: model || '',
+                    provider: provider || 'cloud',
+                    providerLabel: provider || 'cloud',
+                    onboardedAt: new Date().toISOString(),
+                };
+                if (apiKey) {
+                    inferenceConfig.credentialEnv = apiKeyEnvVar;
+                    inferenceConfig._apiKey = apiKey;
+                }
+                saveInferenceConfigToDisk(inferenceConfig);
+            } catch { /* inference config save is best-effort */ }
+
+            // Register the sandbox as a claw so it appears in the dashboard
+            try {
+                registerClaw({
+                    id: safeName,
+                    sandboxName: safeName,
+                    gatewayName: 'nemoclaw',
+                    config: {
                         provider: provider || 'cloud',
-                        providerLabel: provider || 'cloud',
-                        onboardedAt: new Date().toISOString(),
-                    };
-                    if (apiKey) {
-                        inferenceConfig.credentialEnv = apiKeyEnvVar;
-                    }
-                    saveInferenceConfigToDisk(inferenceConfig);
-                } catch { /* inference config save is best-effort */ }
-            }
+                        model: model || '',
+                        endpointUrl: endpoint || '',
+                    },
+                });
+            } catch { /* claw may already exist from a previous onboard */ }
 
             sendEvent({ step: 'complete', status: 'complete', message: `Sandbox '${safeName}' deployed successfully` });
         } else {
