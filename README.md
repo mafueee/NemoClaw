@@ -271,7 +271,8 @@ NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP
 ### Dashboard Backend Components
 
 - **`lib/grpcClient.js`** — Persistent gRPC channel with mTLS credential loading, connection pooling, and typed async wrappers for all OpenShell and Inference RPCs.
-- **`lib/gatewayHealth.js`** — Health monitoring via gRPC Health RPC and HTTP `/readyz` endpoint.
+- **`lib/gatewayHealth.js`** — Health monitoring via gRPC Health RPC and HTTP `/readyz` endpoint. Reads gateway config from `~/.config/openshell/active_gateway` and `gateways/<name>/metadata.json`.
+- **`services/dockerGateway.js`** — Direct Docker Engine API communication over Unix socket for container lifecycle (start/stop/inspect). Requires Docker API ≥ v1.44.
 - **`routes/claws.js`** — Claw lifecycle routes using gRPC `CreateSandbox` + `WatchSandbox` for SSE-streamed deployment progress.
 - **`services/clawManager.js`** — Claw registry with gRPC-backed sandbox status enrichment.
 - **`server/proto/`** — OpenShell protobuf definitions (`openshell.proto`, `inference.proto`, `datamodel.proto`, `sandbox.proto`).
@@ -300,7 +301,7 @@ nemoclaw gui --port 8888
 
 | Feature | Description |
 |---------|-------------|
-| **Dashboard** | Sandbox overview with real-time health status, quick actions, and gateway **Start/Stop** control |
+| **Dashboard** | Sandbox overview with real-time health status, quick actions, and gateway **Start/Stop** control. A **global gateway banner** appears on every page when the gateway is offline with a one-click Start button. |
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **🔔 Live Updates** | WebSocket-powered real-time sandbox and claw status changes pushed to the dashboard |
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
@@ -308,9 +309,12 @@ nemoclaw gui --port 8888
 | **Sandbox Manager** | List, inspect, start/stop, and **destroy** sandboxes with confirmation dialog and live status badges |
 | **Agent Chat** | Web-based chat interface that executes OpenClaw commands inside sandboxes via **gRPC ExecSandbox** streaming |
 | **Log Viewer** | Real-time log streaming via **gRPC WatchSandbox** with source and level filtering |
-| **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status |
-| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection |
+| **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status. Includes a **YAML editor** with line numbers and **OPA rule validation** panel. |
+| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection. Includes a **Routing Transparency** panel showing resolved inference routes, matched protocols, and credential status. |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
+| **🐳 Container Images** | Build custom sandbox images from Dockerfiles with real-time SSE-streamed build output. Browse and manage your local image library. |
+| **⚖️ Denial Dashboard** | Surface AI-recommended policy changes from automated denial analysis. Review, approve, or reject draft policy chunks with confidence scores, rationale, security notes, and a decision history timeline. |
+| **🔀 Gateway Lifecycle** | Dedicated `/gateway` page with Start/Stop/Restart controls, container details, and health monitoring. The sidebar shows a **live health indicator dot** and a **global alert banner** appears on every page when the gateway is offline — ensuring you can always start the gateway without navigating away. |
 
 ### Multi-Claw Management
 
@@ -351,6 +355,45 @@ NemoClaw supports running **multiple independent claw instances** under a single
 | `GET` | `/api/providers/:name` | Get a specific provider |
 | `PUT` | `/api/providers/:name` | Update a provider |
 | `DELETE` | `/api/providers/:name` | Delete a provider |
+
+#### Gateway Lifecycle
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/gateway/status` | Gateway container status via Docker API |
+| `POST` | `/api/gateway/start` | Start the gateway container |
+| `POST` | `/api/gateway/stop` | Stop the gateway container |
+
+#### Custom Image Builder
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/images` | List local container images |
+| `POST` | `/api/images/build` | Build custom image (SSE-streamed output) |
+| `DELETE` | `/api/images/:tag` | Remove a container image |
+
+#### Policy YAML Editor
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/policies/:sandbox/config` | Get sandbox policy as YAML |
+| `PUT` | `/api/policies/:sandbox/config` | Validate and apply policy from YAML |
+| `POST` | `/api/policies/validate` | OPA rule validation (dry-run) |
+
+#### Denial Dashboard (Draft Policies)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/policies/:sandbox/drafts` | Get pending draft policy chunks |
+| `POST` | `/api/policies/drafts/approve` | Approve a draft chunk |
+| `POST` | `/api/policies/drafts/reject` | Reject a draft chunk with optional reason |
+| `GET` | `/api/policies/:sandbox/drafts/history` | Decision history timeline |
+
+#### Inference Routing Transparency
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/inference/routes` | Resolved inference routes with credential status |
 
 ### WebSocket Live Updates
 
