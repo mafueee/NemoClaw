@@ -47,6 +47,21 @@ export interface GatewayStatus {
     output: string;
 }
 
+export interface GatewayStatusDetailed {
+    healthy: boolean;
+    running: boolean;
+    version: string;
+    method: string;
+    endpoint: string;
+    containerState: string;
+    containerName: string;
+    containerId?: string;
+    image: string;
+    configured: boolean;
+    source: string;
+    error?: string;
+}
+
 // Policy preset with status
 export interface PolicyPreset {
     name: string;
@@ -66,10 +81,10 @@ export const api = {
     stopSandbox: (name: string) => request<{ ok: boolean }>(`/sandboxes/${name}/stop`, { method: 'POST' }),
     destroySandbox: (name: string) => request<{ ok: boolean; message: string }>(`/sandboxes/${name}/destroy`, { method: 'POST' }),
 
-    // Gateway
+    // Gateway (Docker API lifecycle)
     getGatewayStatus: () => request<GatewayStatus>('/gateway/status'),
-    startGateway: () => request<{ ok: boolean; healthy: boolean; output: string }>('/gateway/start', { method: 'POST' }),
-    stopGateway: () => request<{ ok: boolean; output: string }>('/gateway/stop', { method: 'POST' }),
+    startGateway: () => request<{ ok: boolean; healthy: boolean; message: string }>('/gateway/start', { method: 'POST' }),
+    stopGateway: () => request<{ ok: boolean; message: string }>('/gateway/stop', { method: 'POST' }),
 
     // Ports
     getPorts: () => request<{ ports: Record<string, number>; status: PortStatus[]; sources: PortSource[] }>('/ports'),
@@ -87,7 +102,7 @@ export const api = {
             method: 'POST',
         }),
 
-    // Policies
+    // Policies (presets)
     getPolicies: () => request<{ presets: string[] }>('/policies'),
     getPresetsWithStatus: (sandboxName?: string) =>
         request<{ ok: boolean; presets: PolicyPreset[] }>(`/policies/presets${sandboxName ? `?sandboxName=${encodeURIComponent(sandboxName)}` : ''}`),
@@ -101,6 +116,36 @@ export const api = {
             method: 'POST',
             body: JSON.stringify({ sandboxName, presetName }),
         }),
+
+    // Policy YAML editor
+    getSandboxPolicyYaml: (sandbox: string) =>
+        request<{ ok: boolean; yaml: string; version: number; policyHash: string; policySource: string }>(`/policies/${encodeURIComponent(sandbox)}/config`),
+    saveSandboxPolicyYaml: (sandbox: string, yaml: string) =>
+        request<{ ok: boolean; version: number; policyHash: string; warnings: string[]; errors?: string[] }>(`/policies/${encodeURIComponent(sandbox)}/config`, {
+            method: 'PUT',
+            body: JSON.stringify({ yaml }),
+        }),
+    validatePolicy: (yaml: string) =>
+        request<{ valid: boolean; errors: string[]; warnings: string[] }>('/policies/validate', {
+            method: 'POST',
+            body: JSON.stringify({ yaml }),
+        }),
+
+    // Draft policy (denial dashboard)
+    getDraftChunks: (sandbox: string, filter?: string) =>
+        request<DraftChunksResponse>(`/policies/${encodeURIComponent(sandbox)}/drafts${filter ? `?status=${encodeURIComponent(filter)}` : ''}`),
+    approveDraft: (sandboxName: string, chunkId: string) =>
+        request<{ ok: boolean; policyVersion: number; policyHash: string }>('/policies/drafts/approve', {
+            method: 'POST',
+            body: JSON.stringify({ sandboxName, chunkId }),
+        }),
+    rejectDraft: (sandboxName: string, chunkId: string, reason?: string) =>
+        request<{ ok: boolean }>('/policies/drafts/reject', {
+            method: 'POST',
+            body: JSON.stringify({ sandboxName, chunkId, reason }),
+        }),
+    getDraftHistory: (sandbox: string) =>
+        request<{ ok: boolean; entries: DraftHistoryEntry[] }>(`/policies/${encodeURIComponent(sandbox)}/drafts/history`),
 
     // Onboarding
     getPreflightChecks: () => request<{ checks: PreflightCheck[] }>('/onboard/preflight'),
@@ -124,6 +169,15 @@ export const api = {
             method: 'POST',
             body: JSON.stringify({ endpoint, apiKey }),
         }),
+
+    // Inference routing transparency
+    getInferenceRoutes: () =>
+        request<InferenceRoutesResponse>('/inference/routes'),
+
+    // Custom images
+    listImages: () => request<{ ok: boolean; images: ContainerImage[] }>('/images'),
+    removeImage: (tag: string) =>
+        request<{ ok: boolean; message: string }>(`/images/${encodeURIComponent(tag)}`, { method: 'DELETE' }),
 
     // Claws
     listClaws: () => request<{ ok: boolean; claws: ClawInstance[] }>('/claws'),
@@ -182,6 +236,68 @@ export interface InferenceConfigData {
     onboardedAt?: string;
 }
 
+// Inference routing types
+export interface ResolvedRoute {
+    name: string;
+    baseUrl: string;
+    protocols: string[];
+    hasCredential: boolean;
+    credentialMasked: string;
+    modelId: string;
+    providerType: string;
+}
+
+export interface InferenceRoutesResponse {
+    ok: boolean;
+    routes: ResolvedRoute[];
+    revision: string;
+    generatedAt: string;
+}
+
+// Draft policy types
+export interface PolicyChunkDto {
+    id: string;
+    status: string;
+    ruleName: string;
+    proposedRule: unknown;
+    rationale: string;
+    securityNotes: string;
+    confidence: number;
+    denialSummaryIds: string[];
+    createdAt: string;
+    decidedAt: string | null;
+    stage: string;
+    supersedesChunkId: string;
+    hitCount: number;
+    firstSeen: string;
+    lastSeen: string;
+    binary: string;
+}
+
+export interface DraftChunksResponse {
+    ok: boolean;
+    chunks: PolicyChunkDto[];
+    rollingSummary: string;
+    draftVersion: string;
+    lastAnalyzedAt: string | null;
+}
+
+export interface DraftHistoryEntry {
+    timestamp: string;
+    eventType: string;
+    description: string;
+    chunkId: string;
+}
+
+// Container image types
+export interface ContainerImage {
+    id: string;
+    tags: string[];
+    size: number;
+    sizeHuman: string;
+    created: string;
+}
+
 // WebSocket connection
 export function createWebSocket(onMessage: (data: unknown) => void): WebSocket {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -224,4 +340,49 @@ export function streamLogs(
     };
 
     return () => eventSource.close();
+}
+
+// SSE for image build streaming
+export function streamImageBuild(
+    dockerfile: string,
+    tag: string,
+    buildArgs: Record<string, string>,
+    onEvent: (data: { step: string; status: string; message: string; done?: boolean; success?: boolean }) => void,
+    onError?: (err: string) => void
+): () => void {
+    const controller = new AbortController();
+
+    fetch(`${BASE_URL}/images/build`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dockerfile, tag, buildArgs }),
+        signal: controller.signal,
+    }).then(async (response) => {
+        const reader = response.body?.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        onEvent(data);
+                    } catch { /* ignore */ }
+                }
+            }
+        }
+    }).catch((err) => {
+        if (err.name !== 'AbortError' && onError) {
+            onError(err.message);
+        }
+    });
+
+    return () => controller.abort();
 }
