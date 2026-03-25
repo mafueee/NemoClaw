@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
+import clawRoutes from './routes/claws.js';
+import { listClaws } from './services/clawManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,6 +22,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const NEMOCLAW_ROOT = process.env.NEMOCLAW_ROOT || join(__dirname, '..', '..');
 
 app.use(express.json());
+
+// Mount claw instance routes
+app.use(clawRoutes);
 
 // Serve static frontend
 const distDir = join(__dirname, '..', 'dist');
@@ -655,24 +660,78 @@ app.post('/api/chat/message', (req, res) => {
     }
     const safeSession = (sessionId || 'gui-session').replace(/[^a-zA-Z0-9-_]/g, '');
     const safeName = sandboxName.replace(/[^a-z0-9-]/g, '');
-    // Escape double quotes in the message
-    const safeMsg = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+    // Escape single quotes in the message for safe shell embedding
+    const safeMsg = message.replace(/'/g, "'\\''");
 
-    const result = runCli(
-        `openshell sandbox exec ${safeName} -- openclaw agent --agent main --local -m "${safeMsg}" --session-id ${safeSession} 2>&1`,
-        { timeout: 120000 }
-    );
+    // `openshell sandbox exec` does not exist.
+    // Use `openshell sandbox connect <name>` and pipe the openclaw command
+    // through stdin. The connect command opens an SSH shell into the sandbox;
+    // when stdin closes (after we write the command), the shell exits.
+    const CHAT_TIMEOUT_MS = 120000;
+    let stdout = '';
+    let stderr = '';
+    let finished = false;
 
-    if (result.ok) {
-        res.json({ ok: true, response: result.output });
-    } else {
-        // Even on CLI "failure", there may be useful output
-        res.json({
+    const proc = spawn('openshell', ['sandbox', 'connect', safeName], {
+        cwd: NEMOCLAW_ROOT,
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Write the agent command into the sandbox shell's stdin, then close stdin
+    const cmd = `openclaw agent --agent main --local -m '${safeMsg}' --session-id ${safeSession} 2>&1; exit\n`;
+    proc.stdin.write(cmd);
+    proc.stdin.end();
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    const timeout = setTimeout(() => {
+        if (!finished) {
+            finished = true;
+            proc.kill('SIGTERM');
+            res.json({
+                ok: false,
+                response: stdout || 'Agent request timed out.',
+                error: 'Timeout after 120 seconds',
+            });
+        }
+    }, CHAT_TIMEOUT_MS);
+
+    proc.on('close', (code) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+
+        // Strip ANSI escape codes and shell prompt noise from the output
+        const clean = stdout
+            .replace(/\x1b\[[0-9;]*m/g, '')
+            .split('\n')
+            .filter(l => !l.match(/^\s*(sandbox@|bash-|~\$|\$)\s*$/))
+            .join('\n')
+            .trim();
+
+        if (code === 0 || clean) {
+            res.json({ ok: true, response: clean || '(no output)' });
+        } else {
+            res.json({
+                ok: false,
+                response: clean || stderr.trim() || 'No response from agent. Is the sandbox running and OpenClaw installed?',
+                error: code ? `Exit code ${code}` : 'Agent command failed',
+            });
+        }
+    });
+
+    proc.on('error', (err) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        res.status(500).json({
             ok: false,
-            response: result.output || 'No response from agent. Is the sandbox running and OpenClaw installed?',
-            error: result.code ? `Exit code ${result.code}` : 'Agent command failed',
+            response: '',
+            error: `Failed to connect to sandbox: ${err.message}`,
         });
-    }
+    });
 });
 
 // Onboard status (for the wizard)
@@ -722,6 +781,8 @@ app.get('/api/onboard/preflight', async (req, res) => {
 let lastSandboxJson = '';
 let cachedSandboxes = [];
 let cachedGatewayHealthy = null;
+let lastClawsJson = '';
+let cachedClaws = [];
 
 function parseSandboxList(output) {
     const lines = output.split('\n').filter(l => l.trim());
@@ -758,6 +819,7 @@ function sendCurrentState(ws) {
         type: 'status',
         gateway: { healthy: gwHealthy },
         sandboxes: cachedSandboxes,
+        claws: cachedClaws,
         timestamp: new Date().toISOString(),
     }));
 }
@@ -785,11 +847,23 @@ const pollInterval = setInterval(() => {
         cachedGatewayHealthy = gwHealthy;
     }
 
-    // Always send periodic status with both gateway + sandboxes
+    // Poll claw list
+    try {
+        const claws = listClaws();
+        const clawJson = JSON.stringify(claws);
+        if (clawJson !== lastClawsJson) {
+            lastClawsJson = clawJson;
+            cachedClaws = claws;
+            broadcast({ type: 'claw:list', claws });
+        }
+    } catch { /* claw polling is best-effort */ }
+
+    // Always send periodic status with gateway + sandboxes + claws
     broadcast({
         type: 'status',
         gateway: { healthy: gwHealthy },
         sandboxes: cachedSandboxes,
+        claws: cachedClaws,
         timestamp: new Date().toISOString(),
     });
 }, 5000);
