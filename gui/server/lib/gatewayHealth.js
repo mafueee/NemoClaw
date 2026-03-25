@@ -26,7 +26,7 @@ const OPENSHELL_CONFIG_DIR = join(homedir(), '.config', 'openshell');
  * Returns the base URL (e.g., "https://127.0.0.1:30051") or null.
  */
 export function resolveGatewayHttpEndpoint() {
-    const activeFile = join(OPENSHELL_CONFIG_DIR, 'active_cluster');
+    const activeFile = join(OPENSHELL_CONFIG_DIR, 'active_gateway');
     let clusterName;
     try {
         clusterName = readFileSync(activeFile, 'utf-8').trim();
@@ -35,7 +35,7 @@ export function resolveGatewayHttpEndpoint() {
     }
     if (!clusterName) return null;
 
-    const metaPath = join(OPENSHELL_CONFIG_DIR, `${clusterName}_metadata.json`);
+    const metaPath = join(OPENSHELL_CONFIG_DIR, 'gateways', clusterName, 'metadata.json');
     try {
         const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
         return meta.gateway_endpoint || null;
@@ -64,6 +64,11 @@ export async function checkHealthHttp() {
     try {
         const resp = await fetch(url, {
             signal: controller.signal,
+            // For self-signed certs used by OpenShell's internal PKI,
+            // Node.js needs the CA or TLS verification disabled.
+            // In production usage the mTLS CA should be configured;
+            // for now we use the NODE_TLS_REJECT_UNAUTHORIZED escape hatch
+            // which the user may have already set for the CLI to work.
         });
         clearTimeout(timeout);
 
@@ -93,6 +98,10 @@ export async function checkHealthHttp() {
 
 /**
  * Check gateway health via gRPC Health RPC.
+ *
+ * Returns:
+ *   { healthy: true,  version, endpoint, clusterName }
+ *   { healthy: false, error, endpoint?, clusterName? }
  */
 export async function checkHealthGrpc() {
     try {
@@ -116,24 +125,28 @@ export async function checkHealthGrpc() {
  * Combined health check: tries gRPC first (more authoritative), falls back to HTTP.
  */
 export async function checkHealth() {
+    // Try gRPC first — it validates the full mTLS path
     const grpcResult = await checkHealthGrpc();
     if (grpcResult.healthy) {
         return { ...grpcResult, method: 'grpc' };
     }
+
+    // Fall back to HTTP /readyz (works even without mTLS configured)
     const httpResult = await checkHealthHttp();
     return { ...httpResult, method: 'http', grpcError: grpcResult.error };
 }
 
 /**
  * Check if the gateway configuration exists at all.
+ * Useful for determining if the user has completed initial setup.
  */
 export function isGatewayConfigured() {
-    const activeFile = join(OPENSHELL_CONFIG_DIR, 'active_cluster');
+    const activeFile = join(OPENSHELL_CONFIG_DIR, 'active_gateway');
     if (!existsSync(activeFile)) return false;
     try {
         const name = readFileSync(activeFile, 'utf-8').trim();
         if (!name) return false;
-        const metaPath = join(OPENSHELL_CONFIG_DIR, `${name}_metadata.json`);
+        const metaPath = join(OPENSHELL_CONFIG_DIR, 'gateways', name, 'metadata.json');
         return existsSync(metaPath);
     } catch {
         return false;
