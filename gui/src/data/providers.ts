@@ -115,3 +115,35 @@ export const PROVIDERS: ProviderDef[] = [
         apiKeyPlaceholder: 'Optional',
     },
 ];
+
+// ── Keyed dictionary for components that look up providers by key ──
+
+export interface ProviderDefinition {
+    id: string;
+    icon: string;
+    title: string;
+    desc: string;
+    models: string[];
+    defaultModel: string;
+    endpointEditable: boolean;
+    defaultEndpoint: string;
+    apiKeyLabel: string;
+    apiKeyHelp?: string;
+    apiKeyHelpUrl?: string;
+}
+
+export const PROVIDER_DEFINITIONS: Record<string, ProviderDefinition> = Object.fromEntries(
+    PROVIDERS.map(p => [p.key, {
+        id: p.key,
+        icon: p.icon,
+        title: p.title,
+        desc: p.desc,
+        models: p.models,
+        defaultModel: p.models[0] || '',
+        endpointEditable: p.endpointEditable,
+        defaultEndpoint: p.defaultEndpoint,
+        apiKeyLabel: p.apiKeyEnv.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        apiKeyHelp: p.apiKeyHelp,
+        apiKeyHelpUrl: p.apiKeyHelpUrl,
+    }])
+);
