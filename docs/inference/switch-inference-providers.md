@@ -1,9 +1,9 @@
 ---
 title:
-  page: "Switch NemoClaw Inference Models at Runtime"
-  nav: "Switch Inference Models"
-description: "Change the active inference model without restarting the sandbox."
-keywords: ["switch nemoclaw inference model", "change inference runtime"]
+  page: "Switch NemoClaw Inference Providers"
+  nav: "Switch Inference Providers"
+description: "Configure and switch between inference providers via the dashboard or CLI."
+keywords: ["switch nemoclaw inference provider", "multi-provider inference routing"]
 topics: ["generative_ai", "ai_agents"]
 tags: ["openclaw", "openshell", "inference_routing"]
 content:
@@ -18,47 +18,68 @@ status: published
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Switch Inference Models at Runtime
+# Switch Inference Providers
 
-Change the active inference model while the sandbox is running.
-No restart is required.
+Change the active inference provider or model at runtime. No sandbox restart required.
 
 ## Prerequisites
 
 - A running NemoClaw sandbox.
-- The OpenShell CLI on your `PATH`.
+- The web dashboard running (`nemoclaw gui`) or the OpenShell CLI on your `PATH`.
 
-## Switch to a Different Model
+## Switch via the Dashboard (Recommended)
 
-Set the provider to `nvidia-nim` and specify a model from [build.nvidia.com](https://build.nvidia.com):
+1. Open the dashboard and navigate to **Inference Config** in the sidebar.
+2. Select a provider from the visual provider picker.
+3. Enter the model name and API key (if required). API keys are persisted in the credential vault — you only need to enter them once.
+4. Click **Save** to apply the configuration.
+5. Use the **Test Connection** button to verify the provider is reachable.
+
+The **Routing Transparency** panel shows the resolved inference route, matched protocol, and credential status.
+
+## Switch via the CLI
+
+Set the provider and model using the OpenShell CLI:
 
 ```console
 $ openshell inference set --provider nvidia-nim --model nvidia/nemotron-3-super-120b-a12b
 ```
 
-This requires the `NVIDIA_API_KEY` environment variable.
-The `nemoclaw onboard` command stores this key in `~/.nemoclaw/credentials.json` on first run.
-
-## Verify the Active Model
-
-Run the status command to confirm the change:
+Verify the change:
 
 ```console
 $ nemoclaw <name> status
 ```
 
-Add the `--json` flag for machine-readable output:
+## Supported Providers
 
-```console
-$ nemoclaw <name> status --json
-```
+| Provider | Key | Example Model | API Key Required |
+|----------|-----|---------------|------------------|
+| NVIDIA Cloud | `nvidia-nim` | `nvidia/nemotron-3-super-120b-a12b` | Yes — from [build.nvidia.com](https://build.nvidia.com) |
+| OpenRouter | `openrouter` | `google/gemini-3-flash-preview` | Yes — from [openrouter.ai/keys](https://openrouter.ai/keys) |
+| Google Gemini | `gemini` | Gemini models | Yes — from Google AI Studio |
+| Ollama | `ollama` | `llama3.3:latest` | No |
+| vLLM | `vllm` | Auto-detected | No |
+| NIM Local | `nim-local` | `nvidia/nemotron-3-nano-30b-a3b` | No |
 
-The output includes the active provider, model, and endpoint.
+### Provider Notes
 
-## Available Models
+- **OpenRouter** defaults to `google/gemini-3-flash-preview` when no model is specified.
+- **Ollama** supports connecting to remote servers — set the endpoint URL in the dashboard.
+- **vLLM** and **NIM Local** require a running server on the configured endpoint.
+- **NVIDIA Cloud** supports all Nemotron models listed on build.nvidia.com.
 
-The following table lists the models registered with the `nvidia-nim` provider.
-You can switch to any of these models at runtime.
+## Credential Vault
+
+API keys are persisted to `~/.nemoclaw/credentials.json`, organized by provider. Once configured, keys are:
+
+- **Auto-filled** on future deploys and provider switches
+- **Restored** into `process.env` on server restart
+- **Validated** for format before saving
+
+To update a key, simply re-enter it in the dashboard's Inference Config page.
+
+## Available NVIDIA Cloud Models
 
 | Model ID | Label | Context Window | Max Output |
 |---|---|---|---|
@@ -70,3 +91,4 @@ You can switch to any of these models at runtime.
 ## Related Topics
 
 - [Inference Profiles](../reference/inference-profiles.md) for full profile configuration details.
+- [Architecture](../reference/architecture.md) for how inference routing works at the gRPC level.
