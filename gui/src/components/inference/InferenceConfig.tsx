@@ -56,6 +56,7 @@ export function InferenceConfig() {
                 model,
                 endpointUrl: endpoint,
                 credentialEnv: currentProvider.apiKeyEnv,
+                apiKey: apiKey || undefined,
             });
             setBanner({ type: 'success', message: '✅ Configuration saved successfully' });
         } catch (err) {
