@@ -1,5 +1,9 @@
-// NemoClaw Dashboard — Express API Server
-// All sandbox/gateway operations use native gRPC and HTTP — no CLI subprocess calls.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// NemoClaw — Dashboard API Server
+// Express server providing gRPC-native REST/SSE endpoints for the web dashboard.
+// Zero CLI subprocess calls — all operations use direct gRPC and HTTP APIs.
 
 import express from 'express';
 import { createServer } from 'http';
@@ -7,12 +11,12 @@ import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
 import { createRequire } from 'module';
-import clawRoutes from './routes/claws.js';
-import { listClaws, registerClaw } from './services/clawManager.js';
+import { homedir } from 'os';
 import * as grpcClient from './lib/grpcClient.js';
 import * as gatewayHealth from './lib/gatewayHealth.js';
+import clawRoutes from './routes/claws.js';
+import { listClaws, registerClaw } from './services/clawManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -345,6 +349,42 @@ function saveInferenceConfigToDisk(config) {
     writeFileSync(INFERENCE_CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
+/**
+ * Validate that an API key looks syntactically plausible.
+ * Rejects empty, whitespace-only, or obviously corrupted keys.
+ */
+function isValidApiKey(key) {
+    if (!key || typeof key !== 'string') return false;
+    const trimmed = key.trim();
+    if (trimmed.length < 8) return false;
+    // Reject keys that are entirely non-printable or look like garbled data
+    if (/[^\x20-\x7E]/.test(trimmed)) return false;
+    return true;
+}
+
+/**
+ * Restore persisted API key from config.json into process.env at startup.
+ * Without this, the key is lost whenever the server restarts because
+ * process.env values are only held in memory.
+ */
+function restoreApiKeyFromConfig() {
+    try {
+        const cfg = loadInferenceConfig();
+        if (!cfg) return;
+        const envVar = cfg.credentialEnv;
+        const key = cfg._apiKey;
+        if (envVar && key && isValidApiKey(key)) {
+            process.env[envVar] = key;
+            console.log(`  ✓ Restored ${envVar} from persisted config`);
+        }
+    } catch (err) {
+        console.warn('[startup] Could not restore API key from config:', err.message);
+    }
+}
+
+// Restore API key into process.env immediately on module load
+restoreApiKeyFromConfig();
+
 app.get('/api/inference', async (req, res) => {
     try {
         const gwConfig = await grpcClient.getClusterInference();
@@ -376,6 +416,8 @@ app.put('/api/inference', async (req, res) => {
 
         const providerName = `nemoclaw-${provider}`;
 
+        // Best-effort gRPC — save locally even if gateway is unreachable
+        let gatewayWarning = '';
         const credentials = {};
         const config = {};
         if (apiKey) {
@@ -386,26 +428,32 @@ app.put('/api/inference', async (req, res) => {
         }
 
         try {
-            await grpcClient.createProvider({
-                name: providerName,
-                type: provider,
-                credentials,
-                config,
-            });
-        } catch (createErr) {
-            if (createErr.code === 6 /* ALREADY_EXISTS */) {
-                await grpcClient.updateProvider({
+            try {
+                await grpcClient.createProvider({
                     name: providerName,
-                    type: provider,
+                    type: grpcClient.mapProviderToGrpcType(provider),
                     credentials,
                     config,
                 });
-            } else {
-                throw createErr;
+            } catch (createErr) {
+                if (createErr.code === 6 /* ALREADY_EXISTS */) {
+                    await grpcClient.updateProvider({
+                        name: providerName,
+                        type: grpcClient.mapProviderToGrpcType(provider),
+                        credentials,
+                        config,
+                    });
+                } else {
+                    throw createErr;
+                }
             }
-        }
 
-        await grpcClient.setClusterInference(providerName, model || '');
+            await grpcClient.setClusterInference(providerName, model || '');
+        } catch (grpcErr) {
+            // Gateway unreachable — continue with local-only save
+            gatewayWarning = `Gateway not reachable (${grpcErr.message}). Config saved locally.`;
+            console.warn('[inference] gRPC save failed, persisting locally:', grpcErr.message);
+        }
 
         const existing = loadInferenceConfig() || {};
         const updated = {
@@ -423,10 +471,13 @@ app.put('/api/inference', async (req, res) => {
             const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
             process.env[envVar] = apiKey;
             updated._apiKey = apiKey;
+            updated.credentialEnv = envVar;
         }
 
         saveInferenceConfigToDisk(updated);
-        res.json({ ok: true, config: updated });
+        const result = { ok: true, config: updated };
+        if (gatewayWarning) result.warning = gatewayWarning;
+        res.json(result);
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
     }
@@ -467,6 +518,32 @@ app.post('/api/inference/test', async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+// ── Inference Routing Transparency ──────────────────────────────
+
+app.get('/api/inference/routes', async (req, res) => {
+    try {
+        const bundle = await grpcClient.getInferenceBundle();
+        const routes = (bundle.routes || []).map(route => ({
+            name: route.name || '',
+            baseUrl: route.baseUrl || '',
+            protocols: route.protocols || [],
+            hasCredential: !!(route.apiKey && route.apiKey !== ''),
+            credentialMasked: route.apiKey ? `${route.apiKey.slice(0, 4)}...${route.apiKey.slice(-4)}` : '',
+            modelId: route.modelId || '',
+            providerType: route.providerType || '',
+        }));
+        res.json({
+            ok: true,
+            routes,
+            revision: bundle.revision || '',
+            generatedAt: bundle.generatedAtMs ? new Date(parseInt(bundle.generatedAtMs, 10)).toISOString() : '',
+        });
+    } catch (err) {
+        // Gateway unreachable — return empty routes instead of 500
+        res.json({ ok: true, routes: [], revision: '', generatedAt: '', warning: err.message });
     }
 });
 
@@ -528,8 +605,20 @@ app.get('/api/sandboxes/:name/logs', async (req, res) => {
 
 // ── Onboard Execution (SSE via gRPC) ────────────────────────────
 
-app.post('/api/onboard/execute', async (req, res) => {
-    const { sandboxName, provider, model, apiKey, endpoint } = req.body;
+app.get('/api/onboard/execute', async (req, res) => {
+    // Config via query: ?config=URL-encoded-JSON or individual params
+    let sandboxName, provider, model, apiKey, endpoint;
+    if (req.query.config) {
+        try {
+            const cfg = JSON.parse(req.query.config);
+            ({ sandboxName, provider, model, apiKey, endpoint } = cfg);
+        } catch { /* fallback to individual params */ }
+    }
+    sandboxName = sandboxName || req.query.sandboxName;
+    provider = provider || req.query.provider;
+    model = model || req.query.model;
+    apiKey = apiKey || req.query.apiKey;
+    endpoint = endpoint || req.query.endpoint;
 
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -567,7 +656,7 @@ app.post('/api/onboard/execute', async (req, res) => {
         try {
             await grpcClient.createProvider({
                 name: providerName,
-                type: providerType,
+                type: grpcClient.mapProviderToGrpcType(providerType),
                 credentials,
                 config,
             });
@@ -575,7 +664,7 @@ app.post('/api/onboard/execute', async (req, res) => {
             if (createErr.code === 6 /* ALREADY_EXISTS */) {
                 await grpcClient.updateProvider({
                     name: providerName,
-                    type: providerType,
+                    type: grpcClient.mapProviderToGrpcType(providerType),
                     credentials,
                     config,
                 });
@@ -727,9 +816,9 @@ app.post('/api/chat/message', async (req, res) => {
         const resp = await grpcClient.getSandbox(sandboxName);
         sandboxId = resp.sandbox?.id || sandboxName;
     } catch {
-        return res.status(404).json({
+        return res.json({
             ok: false,
-            response: `Sandbox '${sandboxName}' not found or unreachable.`,
+            response: `Sandbox '${sandboxName}' not found or unreachable. Check the Sandboxes page to verify it is running.`,
             error: 'Sandbox not found',
         });
     }
@@ -743,29 +832,42 @@ app.post('/api/chat/message', async (req, res) => {
     if (!resolvedApiKey && inferCfg.provider && inferCfg.provider !== 'ollama') {
         return res.json({
             ok: false,
-            response: `Inference API key not configured. Please go to the Inference Config page and save your ${inferCfg.provider} API key, then try again.`,
+            response: `No API key found for provider '${inferCfg.provider}'. Please configure your API key on the Inference Config page.`,
             error: 'Missing API key',
         });
     }
 
-    if (resolvedApiKey) {
-        if (credEnv) environment[credEnv] = resolvedApiKey;
-        environment.OPENAI_API_KEY = resolvedApiKey;
+    if (resolvedApiKey && !isValidApiKey(resolvedApiKey)) {
+        return res.json({
+            ok: false,
+            response: `The stored API key for '${inferCfg.provider}' appears to be corrupted (contains non-printable characters or is too short). Please re-enter your API key on the Inference Config page.`,
+            error: 'Corrupted API key',
+        });
+    }
+
+    if (credEnv && resolvedApiKey) {
+        environment[credEnv] = resolvedApiKey;
     }
     if (inferCfg.endpointUrl) {
-        environment.OPENAI_BASE_URL = inferCfg.endpointUrl;
+        const urlEnvMap = {
+            'ollama': 'OLLAMA_HOST',
+            'vllm': 'VLLM_ENDPOINT',
+            'openrouter': 'OPENROUTER_BASE_URL',
+            'nim-local': 'NIM_ENDPOINT',
+        };
+        const urlEnv = urlEnvMap[inferCfg.provider] || `${inferCfg.provider?.toUpperCase()}_ENDPOINT`;
+        environment[urlEnv] = inferCfg.endpointUrl;
     }
-    if (inferCfg.model) {
-        environment.OPENCLAW_MODEL = inferCfg.model;
-    }
-
-    const command = ['openclaw', 'agent', '--agent', 'main', '--local'];
-    if (inferCfg.model) {
-        command.push('--model', inferCfg.model);
-    }
-    command.push('-m', message, '--session-id', safeSession);
 
     try {
+        const command = [
+            'openclaw', 'agent',
+            '--agent', 'main',
+            '--local',
+            '-m', message,
+            '--session-id', safeSession,
+        ];
+
         const stream = grpcClient.execSandbox(sandboxId, command, {
             environment,
             timeoutSeconds: 120,
@@ -773,6 +875,7 @@ app.post('/api/chat/message', async (req, res) => {
 
         let stdout = '';
         let stderr = '';
+        let exitCode = null;
         let finished = false;
 
         const timeout = setTimeout(() => {
@@ -781,54 +884,48 @@ app.post('/api/chat/message', async (req, res) => {
                 stream.cancel();
                 res.json({
                     ok: false,
-                    response: stdout || 'Agent request timed out.',
-                    error: 'Timeout after 120 seconds',
+                    response: 'The agent did not respond within 120 seconds. The sandbox may be overloaded.',
+                    error: 'Timeout',
                 });
             }
-        }, 120000);
+        }, 125000);
 
         stream.on('data', (event) => {
+            if (finished) return;
             if (event.stdout) {
-                stdout += Buffer.isBuffer(event.stdout.data)
-                    ? event.stdout.data.toString('utf-8')
-                    : (event.stdout.data || '');
+                stdout += Buffer.isBuffer(event.stdout) ? event.stdout.toString('utf-8') : String(event.stdout);
             }
             if (event.stderr) {
-                stderr += Buffer.isBuffer(event.stderr.data)
-                    ? event.stderr.data.toString('utf-8')
-                    : (event.stderr.data || '');
+                stderr += Buffer.isBuffer(event.stderr) ? event.stderr.toString('utf-8') : String(event.stderr);
             }
-            if (event.exit) {
-                if (finished) return;
+            if (event.exitCode !== undefined && event.exitCode !== null) {
+                exitCode = event.exitCode;
+            }
+            if (event.exit !== undefined) {
+                exitCode = event.exit;
                 finished = true;
                 clearTimeout(timeout);
 
-                const exitCode = event.exit.exitCode || 0;
-                const clean = stdout
-                    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-                    .replace(/\x1b\][^\x07]*\x07/g, '')
-                    .replace(/\r/g, '')
-                    .split('\n')
-                    .filter(l => {
-                        const t = l.trim();
-                        if (!t) return false;
-                        if (t.startsWith('openclaw agent')) return false;
-                        if (t === 'exit') return false;
-                        if (/^\s*(sandbox@|bash-|\$|~\$)/.test(t)) return false;
-                        if (t.includes('[UNDICI-') || t.includes('Warning:') || t.includes('--trace-warnings')) return false;
-                        if (t.startsWith('\u{1F99E}')) return false;
-                        if (/^\s+I've seen your|^\s+OpenClaw|^\s+Finally,/.test(t)) return false;
-                        if (/^\[(\?2004[hl]|[0-9;]*[A-Z])/.test(t)) return false;
-                        if (t.startsWith('export ')) return false;
-                        if (/^\d{2}:\d{2}:\d{2}\s+\[agent\//.test(t)) return false;
-                        return true;
-                    })
-                    .join('\n')
-                    .trim();
-
-                if (exitCode === 0 || clean) {
-                    res.json({ ok: true, response: clean || '(no output)' });
+                if (exitCode === 127) {
+                    res.json({
+                        ok: false,
+                        response: 'OpenClaw is not installed in this sandbox. The sandbox may need to be rebuilt with the OpenClaw image.\n\nTry creating a new sandbox from the Onboard page.',
+                        error: 'OpenClaw not found (exit 127)',
+                    });
+                } else if (exitCode === 0) {
+                    const clean = stdout
+                        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                        .replace(/\r/g, '')
+                        .trim();
+                    res.json({
+                        ok: true,
+                        response: clean || '(no output)',
+                    });
                 } else {
+                    const clean = stdout
+                        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                        .replace(/\r/g, '')
+                        .trim();
                     res.json({
                         ok: false,
                         response: clean || stderr.trim() || 'No response from agent. Is the sandbox running and OpenClaw installed?',
@@ -842,10 +939,26 @@ app.post('/api/chat/message', async (req, res) => {
             if (finished) return;
             finished = true;
             clearTimeout(timeout);
-            res.status(500).json({
+
+            // Classify the gRPC error into a user-friendly message
+            const msg = err.message || 'Unknown error';
+            let response;
+            if (msg.includes('ssh transport') || msg.includes('Connection reset')) {
+                response = 'The sandbox SSH transport was reset. The sandbox may need to be restarted.\n\nTry restarting the sandbox from the Sandboxes page, or create a new one from the Onboard page.';
+            } else if (msg.includes('UNAVAILABLE') || msg.includes('connect')) {
+                response = 'Cannot reach the OpenShell gateway. Make sure the gateway container is running.';
+            } else if (msg.includes('not found') || msg.includes('NOT_FOUND')) {
+                response = `The sandbox was not found. It may have been deleted. Please select a different sandbox.`;
+            } else {
+                response = `Failed to reach the agent: ${msg}\n\nMake sure the sandbox is running and OpenClaw is installed inside it.`;
+            }
+
+            // Return 200 with structured error so the frontend can display
+            // the actual message instead of a generic "500 Internal Server Error"
+            res.json({
                 ok: false,
-                response: '',
-                error: `Failed to execute in sandbox: ${err.message}`,
+                response,
+                error: msg,
             });
         });
 
@@ -859,10 +972,17 @@ app.post('/api/chat/message', async (req, res) => {
             });
         });
     } catch (err) {
-        res.status(500).json({
+        const msg = err.message || 'Unknown error';
+        let response;
+        if (msg.includes('No gateway connection')) {
+            response = 'OpenShell gateway is not configured or unreachable. Check the Gateway page for status.';
+        } else {
+            response = `Failed to connect to sandbox: ${msg}`;
+        }
+        res.json({
             ok: false,
-            response: '',
-            error: `Failed to connect to sandbox: ${err.message}`,
+            response,
+            error: msg,
         });
     }
 });
