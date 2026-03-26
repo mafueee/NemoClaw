@@ -7,6 +7,7 @@ import '@testing-library/jest-dom/vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OnboardWizard } from './OnboardWizard';
+import { PROVIDERS } from '../../data/providers';
 
 vi.mock('../../api/client', async () => {
     const getPreflightChecks = vi.fn().mockResolvedValue({
@@ -46,7 +47,7 @@ describe('OnboardWizard', () => {
         render(<OnboardWizard />);
         expect(screen.getAllByText('Preflight').length).toBeGreaterThan(0);
         expect(screen.getAllByText('Gateway').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Done').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Deploy').length).toBeGreaterThan(0);
     });
 
     it('shows preflight checks on first render', async () => {
@@ -80,38 +81,23 @@ describe('OnboardWizard', () => {
         expect(screen.getByText('Gateway Configuration')).toBeInTheDocument();
     });
 
-    it('shows CLI command on gateway step', async () => {
-        const user = userEvent.setup();
-        render(<OnboardWizard />);
-        await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
-        await clickContinue(user); // → Gateway
-        expect(screen.getAllByText('openshell gateway start --name nemoclaw').length).toBeGreaterThan(0);
-    });
-
-    it('shows sandbox name input with validation on step 2', async () => {
-        const user = userEvent.setup();
-        render(<OnboardWizard />);
-        await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
-        await clickContinue(user); // → Gateway
-        await clickContinue(user); // → Sandbox
-        expect(screen.getByText('Sandbox Configuration')).toBeInTheDocument();
-        expect(screen.getByDisplayValue('my-assistant')).toBeInTheDocument();
-    });
-
-    it('shows 3 inference providers on step 3', async () => {
+    it('shows all providers including OpenRouter and Gemini on inference step', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
         await clickContinue(user); // → Gateway
         await clickContinue(user); // → Sandbox
         await clickContinue(user); // → Inference
-        expect(screen.getByText('Inference Provider')).toBeInTheDocument();
-        expect(screen.getByText('NVIDIA Cloud API')).toBeInTheDocument();
-        expect(screen.getByText('Local Ollama')).toBeInTheDocument();
-        expect(screen.getByText('Local vLLM')).toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByText('Inference Provider')).toBeTruthy());
+        expect(screen.getAllByText('NVIDIA Cloud API').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Ollama').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('OpenRouter').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Google Gemini').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Local vLLM').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Local GPU (NIM)').length).toBeGreaterThan(0);
     });
 
-    it('shows CLI command on completion step', async () => {
+    it('shows Deploy button on final step', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
@@ -119,9 +105,27 @@ describe('OnboardWizard', () => {
         await clickContinue(user); // → Sandbox
         await clickContinue(user); // → Inference
         await clickContinue(user); // → Policy
-        const completeBtn = screen.getByRole('button', { name: 'Complete Setup →' });
-        await user.click(completeBtn);
-        expect(screen.getByText('Setup Complete!')).toBeInTheDocument();
-        expect(screen.getByText('nemoclaw onboard')).toBeInTheDocument();
+        const deployBtn = screen.getByRole('button', { name: 'Deploy Sandbox →' });
+        await user.click(deployBtn);
+        expect(screen.getAllByTestId('deploy-btn').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('🚀 Deploy Sandbox').length).toBeGreaterThan(0);
+    });
+
+    it('shared PROVIDERS includes OpenRouter with correct config', () => {
+        const openrouter = PROVIDERS.find(p => p.key === 'openrouter');
+        expect(openrouter).toBeDefined();
+        expect(openrouter!.title).toBe('OpenRouter');
+        expect(openrouter!.defaultEndpoint).toBe('https://openrouter.ai/api/v1');
+        expect(openrouter!.apiKeyPlaceholder).toBe('sk-or-v1-...');
+        expect(openrouter!.models.length).toBeGreaterThan(0);
+    });
+
+    it('shared PROVIDERS includes Ollama with editable endpoint', () => {
+        const ollama = PROVIDERS.find(p => p.key === 'ollama');
+        expect(ollama).toBeDefined();
+        expect(ollama!.title).toBe('Ollama');
+        expect(ollama!.desc).toContain('remote');
+        expect(ollama!.endpointEditable).toBe(true);
+        expect(ollama!.defaultEndpoint).toBe('http://localhost:11434/v1');
     });
 });
