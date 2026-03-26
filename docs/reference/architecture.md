@@ -1,11 +1,11 @@
 ---
 title:
-  page: "NemoClaw Architecture — Plugin, Blueprint, and Sandbox Structure"
+  page: "NemoClaw Architecture — gRPC Backend, React Dashboard, and OpenShell Integration"
   nav: "Architecture"
-description: "Learn how NemoClaw combines a lightweight CLI plugin with a versioned blueprint to move OpenClaw into a controlled sandbox."
-keywords: ["nemoclaw architecture", "nemoclaw plugin blueprint structure"]
+description: "Technical reference for NemoClaw's gRPC-native backend, React dashboard, and OpenShell gateway integration."
+keywords: ["nemoclaw architecture", "nemoclaw grpc backend dashboard"]
 topics: ["generative_ai", "ai_agents"]
-tags: ["openclaw", "openshell", "sandboxing", "blueprints", "inference_routing"]
+tags: ["openclaw", "openshell", "sandboxing", "grpc", "dashboard", "inference_routing"]
 content:
   type: reference
   difficulty: intermediate
@@ -20,83 +20,151 @@ status: published
 
 # Architecture
 
-NemoClaw has two main components: a TypeScript plugin that integrates with the OpenClaw CLI, and a Python blueprint that orchestrates OpenShell resources.
+NemoClaw is composed of three main layers: a React dashboard (built with Vite), an Express backend with native gRPC bindings, and the NVIDIA OpenShell gateway that manages sandbox lifecycle, inference routing, and policy enforcement.
 
-## NemoClaw Plugin
-
-The plugin is a thin TypeScript package that registers an inference provider and the `/nemoclaw` slash command.
-It runs in-process with the OpenClaw gateway inside the sandbox.
-
-```text
-nemoclaw/
-├── src/
-│   ├── index.ts                    Plugin entry — registers all commands
-│   ├── cli.ts                      Commander.js subcommand wiring
-│   ├── commands/
-│   │   ├── launch.ts               Fresh install into OpenShell
-│   │   ├── connect.ts              Interactive shell into sandbox
-│   │   ├── status.ts               Blueprint run state + sandbox health
-│   │   ├── logs.ts                 Stream blueprint and sandbox logs
-│   │   └── slash.ts                /nemoclaw chat command handler
-│   └── blueprint/
-│       ├── resolve.ts              Version resolution, cache management
-│       ├── fetch.ts                Download blueprint from OCI registry
-│       ├── verify.ts               Digest verification, compatibility checks
-│       ├── exec.ts                 Subprocess execution of blueprint runner
-│       └── state.ts                Persistent state (run IDs)
-├── openclaw.plugin.json            Plugin manifest
-└── package.json                    Commands declared under openclaw.extensions
-```
-
-## NemoClaw Blueprint
-
-The blueprint is a versioned Python artifact with its own release stream.
-The plugin resolves, verifies, and executes the blueprint as a subprocess.
-The blueprint drives all interactions with the OpenShell CLI.
-
-```text
-nemoclaw-blueprint/
-├── blueprint.yaml                  Manifest — version, profiles, compatibility
-├── orchestrator/
-│   └── runner.py                   CLI runner — plan / apply / status
-├── policies/
-│   └── openclaw-sandbox.yaml       Default network + filesystem policy
-```
-
-### Blueprint Lifecycle
+## System Overview
 
 ```{mermaid}
 flowchart LR
-    A[resolve] --> B[verify digest]
-    B --> C[plan]
-    C --> D[apply]
-    D --> E[status]
+    USER["Browser"] -->|HTTP / WS| DASH["React Dashboard<br/>(Vite)"]
+    DASH -->|REST / SSE / WS| API["Express Backend"]
+    API -->|gRPC mTLS| GW["OpenShell Gateway"]
+    API -->|Unix socket| DOCK["Docker Engine"]
+    GW -->|sandbox create<br/>watch, policy| SB["Sandbox<br/>(OpenClaw Agent)"]
+    GW -->|inference route| PROV["Inference Provider"]
+
+    classDef nv fill:#76b900,stroke:#333,color:#fff
+    class DASH,API,GW,SB nv
 ```
 
-1. Resolve. The plugin locates the blueprint artifact and checks the version against `min_openshell_version` and `min_openclaw_version` constraints in `blueprint.yaml`.
-2. Verify. The plugin checks the artifact digest against the expected value.
-3. Plan. The runner determines what OpenShell resources to create or update, such as the gateway, providers, sandbox, inference route, and policy.
-4. Apply. The runner executes the plan by calling `openshell` CLI commands.
-5. Status. The runner reports current state.
+## Dashboard Frontend
+
+The dashboard is a React application built with Vite and TypeScript. It provides the primary user interface for all NemoClaw operations.
+
+```text
+gui/
+├── src/
+│   ├── components/
+│   │   ├── dashboard/       Dashboard home with sandbox overview and gateway status
+│   │   ├── chat/            Agent chat interface with multi-turn conversation
+│   │   ├── onboard/         Onboard wizard with SSE-streamed deployment progress
+│   │   ├── sandboxes/       Sandbox list, detail view, and lifecycle controls
+│   │   ├── claws/           Multi-claw management — list, create, detail views
+│   │   ├── policies/        Policy editor with YAML view and OPA validation
+│   │   ├── inference/       Inference config with provider selection and routing transparency
+│   │   ├── images/          Container image builder and library
+│   │   ├── logs/            Real-time log viewer with source/level filtering
+│   │   ├── gateway/         Gateway lifecycle management (start/stop/restart)
+│   │   ├── ports/           Port configuration manager
+│   │   └── denials/         Denial dashboard with draft policy approval
+│   ├── App.tsx              Router and layout with sidebar navigation
+│   └── index.css            Design system tokens and global styles
+├── index.html               Application entry point
+├── vite.config.ts           Vite build configuration
+└── package.json             Dependencies and build scripts
+```
+
+## Express Backend
+
+The backend is an Express.js server that serves the dashboard, provides REST API endpoints, manages WebSocket connections, and communicates with the OpenShell gateway via gRPC.
+
+```text
+gui/server/
+├── index.js                  Server entry point — Express app, WebSocket, route registration
+├── lib/
+│   ├── grpcClient.js         Persistent gRPC channel with mTLS, typed async wrappers
+│   └── gatewayHealth.js      Health monitoring via gRPC Health RPC and HTTP /readyz
+├── services/
+│   ├── clawManager.js        Claw registry with gRPC-backed status enrichment
+│   └── dockerGateway.js      Docker Engine API over Unix socket for container lifecycle
+├── routes/
+│   ├── claws.js              Claw lifecycle (CRUD, deploy, reconnect, sync)
+│   ├── sandboxes.js          Sandbox lifecycle (list, get, start, stop, destroy)
+│   ├── policies.js           Policy management (YAML editor, OPA validation, drafts)
+│   ├── inference.js          Inference config (providers, routing transparency)
+│   ├── images.js             Container image builder and library
+│   ├── chat.js               Agent chat with server-side LLM proxy
+│   ├── gateway.js            Gateway start/stop/status via Docker API
+│   ├── logs.js               Log streaming via gRPC WatchSandbox
+│   └── ports.js              Port configuration management
+└── proto/
+    ├── openshell.proto        OpenShell gateway service definitions
+    ├── inference.proto        Inference routing service definitions
+    ├── datamodel.proto        Shared data model messages
+    └── sandbox.proto          Sandbox-specific messages
+```
+
+### Key Backend Components
+
+#### `grpcClient.js`
+
+The central gRPC client that maintains a persistent mTLS connection to the OpenShell gateway. Key features:
+
+- **mTLS authentication** — loads client certificates from `~/.config/openshell/clusters/<name>/mtls/`
+- **Typed async wrappers** — `createSandbox()`, `deleteSandbox()`, `listSandboxes()`, `watchSandbox()`, etc.
+- **Provider type mapping** (`mapProviderToGrpcType`) — translates NemoClaw provider keys (OpenRouter, Gemini, Ollama, vLLM) to gateway-supported gRPC types (`openai`, `nvidia`)
+- **Config key mapping** (`mapProviderToConfigKey`) — translates provider keys to gateway-expected config keys (`OPENAI_BASE_URL`, `NVIDIA_BASE_URL`, etc.)
+- **Idempotent helpers** — `ensureProvider` handles type conflicts via delete+recreate; `ensureSandbox` handles UNIQUE constraint violations
+
+#### `gatewayHealth.js`
+
+Monitors gateway liveness via gRPC Health RPC and HTTP `/readyz`. Reads gateway config from `~/.config/openshell/active_gateway` and `gateways/<name>/metadata.json`.
+
+#### `dockerGateway.js`
+
+Communicates with the Docker Engine API over the Unix socket for gateway container lifecycle (start, stop, inspect). Requires Docker API ≥ v1.44.
+
+## OpenShell Gateway
+
+NemoClaw does not replace the OpenShell gateway — it provides a management layer on top of it. The gateway handles:
+
+- **Sandbox lifecycle** — container creation, teardown, and state management
+- **Inference routing** — intercepting agent inference calls and routing to configured providers
+- **Policy enforcement** — Landlock filesystem isolation, seccomp syscall filtering, network namespace egress control
+- **Draft policies** — AI-recommended policy changes from denial analysis
+
+### gRPC API Surface
+
+| Operation | RPC | Description |
+|-----------|-----|-------------|
+| Sandbox create | `CreateSandbox` | Typed `SandboxSpec` protobuf messages |
+| Sandbox delete | `DeleteSandbox` | Clean teardown by name |
+| Sandbox list/get | `ListSandboxes` / `GetSandbox` | Structured state with phase and conditions |
+| Watch streams | `WatchSandbox` | Server-streaming for real-time events |
+| Inference config | `SetClusterInference` / `GetClusterInference` | Cluster-level routing |
+| Provider CRUD | `Create/Update/Delete/ListProviders` | Provider credential management |
+| Policy management | `UpdateConfig` / `GetSandboxConfig` | Policy updates |
+| Draft policy | `GetDraftPolicy` / `ApproveDraftChunk` / `RejectDraftChunk` | Denial analysis |
+| Health | `Health` + HTTP `/readyz` | Liveness and readiness |
 
 ## Sandbox Environment
 
-The sandbox runs the
-[`ghcr.io/nvidia/openshell-community/sandboxes/openclaw`](https://github.com/NVIDIA/OpenShell-Community)
-container image. Inside the sandbox:
+The sandbox runs the OpenShell community container image. Inside the sandbox:
 
-- OpenClaw runs with the NemoClaw plugin pre-installed.
-- Inference calls are routed through OpenShell to the configured provider.
-- Network egress is restricted by the baseline policy in `openclaw-sandbox.yaml`.
-- Filesystem access is confined to `/sandbox` and `/tmp` for read-write access, with system paths read-only.
+- OpenClaw runs with the NemoClaw plugin pre-installed
+- Inference calls are routed through OpenShell to the configured provider
+- Network egress is restricted by the baseline policy in `openclaw-sandbox.yaml`
+- Filesystem access is confined to `/sandbox` and `/tmp` for read-write, with system paths read-only
 
 ## Inference Routing
 
-Inference requests from the agent never leave the sandbox directly.
-OpenShell intercepts them and routes to the configured provider:
-
 ```text
-Agent (sandbox)  ──▶  OpenShell gateway  ──▶  NVIDIA Endpoint (build.nvidia.com)
+Agent (sandbox)  ──▶  OpenShell gateway  ──▶  Provider (NVIDIA / OpenRouter / Gemini / Ollama / vLLM / NIM)
 ```
 
-Refer to [Inference Profiles](../reference/inference-profiles.md) for provider configuration details.
+The gateway intercepts all inference calls from the agent and routes them to whichever provider is configured. The provider type and credentials are managed via gRPC `CreateProvider` / `SetClusterInference` calls from the backend.
+
+## Data Storage
+
+| Path | Content |
+|------|--------|
+| `~/.nemoclaw/claws.json` | Claw registry — config, creation time, last connection |
+| `~/.nemoclaw/credentials.json` | Per-provider API key vault |
+| `~/.config/nemoclaw/ports.json` | Saved port configuration overrides |
+| `~/.config/openshell/` | OpenShell gateway config, mTLS certs, cluster metadata |
+
+## Related Topics
+
+- [How It Works](../about/how-it-works.md) for the high-level overview
+- [Commands](../reference/commands.md) for the CLI reference
+- [Inference Profiles](../reference/inference-profiles.md) for provider configuration
