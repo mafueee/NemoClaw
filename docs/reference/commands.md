@@ -2,10 +2,10 @@
 title:
   page: "NemoClaw CLI Commands Reference"
   nav: "Commands"
-description: "Full CLI reference for plugin and standalone NemoClaw commands."
-keywords: ["nemoclaw cli commands", "nemoclaw command reference"]
+description: "Full CLI and dashboard reference for NemoClaw sandbox management."
+keywords: ["nemoclaw cli commands", "nemoclaw command reference", "nemoclaw dashboard"]
 topics: ["generative_ai", "ai_agents"]
-tags: ["openclaw", "openshell", "nemoclaw", "cli"]
+tags: ["openclaw", "openshell", "nemoclaw", "cli", "dashboard"]
 content:
   type: reference
   difficulty: technical_beginner
@@ -20,83 +20,23 @@ status: published
 
 # Commands
 
-The `nemoclaw` CLI is the primary interface for managing NemoClaw sandboxes. It is installed when you run `npm install -g nemoclaw`.
+NemoClaw provides both a CLI and a web dashboard for managing sandboxes. The dashboard is the primary interface for most operations, while the CLI is available for scripting, automation, and quick terminal access.
 
-Every command supports `--help` to print usage, options, and examples:
+> **Dashboard First**
+>
+> All sandbox lifecycle, inference configuration, policy management, and monitoring operations are available in the web dashboard at `http://localhost:3000`. Launch it with `nemoclaw gui`.
+
+Every CLI command supports `--help` to print usage, options, and examples:
 
 ```console
 $ nemoclaw <command> --help
 ```
 
-### `/nemoclaw` Slash Command
-
-The `/nemoclaw` slash command is available inside the OpenClaw chat interface for quick actions:
-
-| Subcommand | Description |
-|---|---|
-| `/nemoclaw status` | Show sandbox and inference state |
-
-## Standalone Host Commands
-
-The `nemoclaw` binary handles host-side operations that run outside the OpenClaw plugin context.
-
-### `nemoclaw onboard`
-
-Run the interactive setup wizard.
-The wizard creates an OpenShell gateway, registers inference providers, builds the sandbox image, and creates the sandbox.
-Use this command for new installs and for recreating a sandbox after changes to policy or configuration.
-
-```console
-$ nemoclaw onboard [--non-interactive]
-```
-
-| Flag | Effect |
-|------|--------|
-| `--non-interactive` | Skip interactive prompts (use environment variables and defaults) |
-
-The first run prompts for your NVIDIA API key and saves it to `~/.nemoclaw/credentials.json`.
-
-The wizard prompts for a sandbox name.
-Names must follow RFC 1123 subdomain rules: lowercase alphanumeric characters and hyphens only, and must start and end with an alphanumeric character.
-Uppercase letters are automatically lowercased.
-
-Before creating the gateway, the wizard runs preflight checks.
-On systems with cgroup v2 (Ubuntu 24.04, DGX Spark, WSL2), it verifies that Docker is configured with `"default-cgroupns-mode": "host"` and provides fix instructions if the setting is missing.
-
-### `nemoclaw list`
-
-List all registered sandboxes with their model, provider, and policy presets.
-
-```console
-$ nemoclaw list [--json]
-```
-
-| Flag | Effect |
-|------|--------|
-| `--json` | Output structured JSON for scripting |
-
-Example JSON output:
-
-```console
-$ nemoclaw list --json | jq '.sandboxes[].name'
-```
-
-### `nemoclaw deploy`
-
-:::{warning}
-The `nemoclaw deploy` command is experimental and may not work as expected.
-:::
-
-Deploy NemoClaw to a remote GPU instance through [Brev](https://brev.nvidia.com).
-The deploy script installs Docker, NVIDIA Container Toolkit if a GPU is present, and OpenShell on the VM, then runs the nemoclaw setup and connects to the sandbox.
-
-```console
-$ nemoclaw deploy <instance-name>
-```
+## Primary Commands
 
 ### `nemoclaw gui`
 
-Launch the NemoClaw web dashboard in your browser.
+Launch the NemoClaw web dashboard. This is the recommended way to manage sandboxes, configure inference, edit policies, and chat with agents.
 
 ```console
 $ nemoclaw gui [--port <port>] [--no-open]
@@ -107,17 +47,29 @@ $ nemoclaw gui [--port <port>] [--no-open]
 | `--port <port>` | Run dashboard on a custom port (default: 3000) |
 | `--no-open` | Don't auto-open the browser |
 
-Examples:
+The dashboard provides the full feature set: Onboard Wizard, Sandbox Manager, Agent Chat, Policy Editor, Inference Config, Log Viewer, Denial Dashboard, Gateway Lifecycle, Container Image Builder, and Port Manager.
+
+### `nemoclaw onboard`
+
+Run the interactive setup wizard via CLI. Creates an OpenShell gateway, registers inference providers, builds the sandbox image, and creates the sandbox.
 
 ```console
-$ nemoclaw gui
-$ nemoclaw gui --port 8888
-$ nemoclaw gui --no-open
+$ nemoclaw onboard [--non-interactive]
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--non-interactive` | Skip interactive prompts (use environment variables and defaults) |
+
+:::{tip}
+The same onboarding flow is available in the dashboard via the **Onboard Wizard**, which provides SSE-streamed deployment progress and visual provider selection.
+:::
+
+## Sandbox Commands
 
 ### `nemoclaw <name> connect`
 
-Connect to a sandbox by name.
+Connect to a sandbox by name. Opens an interactive shell inside the sandbox.
 
 ```console
 $ nemoclaw my-assistant connect
@@ -135,23 +87,29 @@ $ nemoclaw my-assistant status [--json]
 |------|--------|
 | `--json` | Output structured JSON for scripting |
 
+:::{tip}
+The dashboard's Sandbox Manager shows this information in real time with live status badges.
+:::
+
 ### `nemoclaw <name> logs`
 
-View sandbox logs.
-Use `--follow` to stream output in real time.
+View sandbox logs. Use `--follow` to stream output in real time.
 
 ```console
 $ nemoclaw my-assistant logs [--follow]
 ```
 
+:::{tip}
+The dashboard's Log Viewer provides the same streaming with source and level filtering.
+:::
+
 ### `nemoclaw <name> destroy`
 
-Stop the NIM container and delete the sandbox.
-This removes the sandbox from the registry.
+Stop and delete a sandbox. This removes the sandbox from the registry.
 
 :::{warning}
 Destroying a sandbox permanently deletes all files inside it, including
-[workspace files](../workspace/workspace-files.md) (SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, and daily memory notes).
+[workspace files](../workspace/workspace-files.md).
 Back up your workspace first by following the instructions at [Back Up and Restore](../workspace/backup-restore.md).
 :::
 
@@ -163,14 +121,27 @@ $ nemoclaw my-assistant destroy [--yes|--force]
 |------|--------|
 | `--yes`, `--force` | Skip the confirmation prompt |
 
+### `nemoclaw list`
+
+List all registered sandboxes with their model, provider, and policy presets.
+
+```console
+$ nemoclaw list [--json]
+```
+
+## Policy Commands
+
 ### `nemoclaw <name> policy-add`
 
-Add a policy preset to a sandbox.
-Presets extend the baseline network policy with additional endpoints.
+Add a policy preset to a sandbox. Presets extend the baseline network policy with additional endpoints.
 
 ```console
 $ nemoclaw my-assistant policy-add
 ```
+
+:::{tip}
+The dashboard's Policy Editor provides a visual YAML editor with OPA validation for editing policies.
+:::
 
 ### `nemoclaw <name> policy-list`
 
@@ -180,70 +151,32 @@ List available policy presets and show which ones are applied to the sandbox.
 $ nemoclaw my-assistant policy-list [--json]
 ```
 
-| Flag | Effect |
-|------|--------|
-| `--json` | Output structured JSON for scripting |
+## Utility Commands
 
-### `openshell term`
+### `nemoclaw start` / `stop` / `status`
 
-Open the OpenShell TUI to monitor sandbox activity and approve network egress requests.
-Run this on the host where the sandbox is running.
-
-```console
-$ openshell term
-```
-
-For a remote Brev instance, SSH to the instance and run `openshell term` there, or use a port-forward to the gateway.
-
-### `nemoclaw start`
-
-Start auxiliary services, such as the Telegram bridge and cloudflared tunnel.
+Manage auxiliary services (Telegram bridge, cloudflared tunnel).
 
 ```console
 $ nemoclaw start
-```
-
-Requires `TELEGRAM_BOT_TOKEN` for the Telegram bridge.
-
-### `nemoclaw stop`
-
-Stop all auxiliary services.
-
-```console
 $ nemoclaw stop
-```
-
-### `nemoclaw status`
-
-Show the sandbox list and the status of auxiliary services.
-
-```console
 $ nemoclaw status [--json]
 ```
-
-| Flag | Effect |
-|------|--------|
-| `--json` | Output structured JSON for scripting |
 
 ### `nemoclaw debug`
 
 Collect diagnostics for bug reports.
 
 ```console
-$ nemoclaw debug [--quick] [--output FILE] [--help]
+$ nemoclaw debug [--quick] [--output FILE]
 ```
-
-| Flag | Effect |
-|------|--------|
-| `--quick` | Collect a minimal set of diagnostics |
-| `--output FILE` | Save diagnostics tarball to a file |
 
 ### `nemoclaw uninstall`
 
 Remove NemoClaw and all resources created during setup.
 
 ```console
-$ nemoclaw uninstall [flags]
+$ nemoclaw uninstall [--yes] [--keep-openshell] [--delete-models]
 ```
 
 | Flag | Effect |
@@ -252,13 +185,48 @@ $ nemoclaw uninstall [flags]
 | `--keep-openshell` | Leave the `openshell` binary installed |
 | `--delete-models` | Also remove NemoClaw-pulled Ollama models |
 
+### `nemoclaw deploy`
+
+:::{warning}
+The `nemoclaw deploy` command is experimental.
+:::
+
+Deploy to a remote GPU instance through [Brev](https://brev.nvidia.com).
+
+```console
+$ nemoclaw deploy <instance-name>
+```
+
 ### `nemoclaw setup-spark`
 
-Set up NemoClaw on DGX Spark.
-This command applies cgroup v2 and Docker fixes required for Ubuntu 24.04.
-Run with `sudo` on the Spark host.
-After the fixes complete, the script prompts you to run `nemoclaw onboard` to continue setup.
+Set up NemoClaw on DGX Spark. Applies cgroup v2 and Docker fixes for Ubuntu 24.04. Run with `sudo`.
 
 ```console
 $ sudo nemoclaw setup-spark
 ```
+
+## OpenShell Commands
+
+### `openshell term`
+
+Open the OpenShell TUI to monitor sandbox activity and approve network egress requests.
+
+```console
+$ openshell term
+```
+
+## Dashboard vs CLI Feature Matrix
+
+| Feature | Dashboard | CLI |
+|---------|-----------|-----|
+| Sandbox create/destroy | ✅ Onboard Wizard | ✅ `nemoclaw onboard` |
+| Sandbox status | ✅ Real-time badges | ✅ `nemoclaw <name> status` |
+| Log streaming | ✅ Filtered log viewer | ✅ `nemoclaw <name> logs --follow` |
+| Inference config | ✅ Visual provider picker | ✅ `openshell inference set` |
+| Policy editing | ✅ YAML editor + OPA | ✅ `nemoclaw <name> policy-add` |
+| Agent chat | ✅ Browser chat | ✅ `openclaw tui` (inside sandbox) |
+| Gateway lifecycle | ✅ Start/Stop/Restart | — |
+| Denial dashboard | ✅ Draft policy approval | — |
+| Image builder | ✅ Dockerfile builds | — |
+| Port management | ✅ Visual port manager | ✅ Environment variables |
+| Multi-claw management | ✅ Card grid + detail views | — |
