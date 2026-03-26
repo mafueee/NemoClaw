@@ -501,6 +501,25 @@ export async function getDraftHistory(name) {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+/**
+ * Map a NemoClaw provider key to a gateway-supported gRPC provider type.
+ * The OpenShell gateway only accepts: 'openai', 'anthropic', 'nvidia'.
+ * Most providers (OpenRouter, Gemini, Ollama, vLLM) expose an
+ * OpenAI-compatible /v1 API, so they map to 'openai'.
+ */
+const PROVIDER_TYPE_MAP = {
+    'cloud':     'nvidia',
+    'nim-local': 'nvidia',
+    'openrouter': 'openai',
+    'gemini':    'openai',
+    'ollama':    'openai',
+    'vllm':      'openai',
+};
+
+export function mapProviderToGrpcType(providerKey) {
+    return PROVIDER_TYPE_MAP[providerKey] || 'openai';
+}
+
 /** Map SandboxPhase proto enum to human-readable status. */
 export function mapPhaseToStatus(phase) {
     const mapping = {
