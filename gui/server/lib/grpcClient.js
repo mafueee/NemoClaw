@@ -8,7 +8,7 @@
 //   - openshell.inference.v1.Inference — cluster inference config + bundles
 //
 // Connection uses the same mTLS credentials that the CLI stores in
-// ~/.config/openshell/gateways/<name>/mtls/.
+// ~/.config/openshell/clusters/<name>/mtls/.
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -39,14 +39,14 @@ const protoDescriptor = grpc.loadPackageDefinition(packageDefinition);
 const OpenShellService = protoDescriptor.openshell.v1.OpenShell;
 const InferenceService = protoDescriptor.openshell.inference.v1.Inference;
 
-// ── mTLS Credential Resolution ───────────────────────────────
+// ── mTLS Credential Resolution ─────────────────────────────────
 
 const OPENSHELL_CONFIG_DIR = join(homedir(), '.config', 'openshell');
 const ACTIVE_CLUSTER_FILE = join(OPENSHELL_CONFIG_DIR, 'active_gateway');
 
 /**
  * Resolve the active OpenShell cluster name.
- * Priority: OPENSHELL_GATEWAY env → active_gateway file.
+ * Priority: OPENSHELL_GATEWAY env → active_cluster file.
  */
 function resolveActiveCluster() {
     if (process.env.OPENSHELL_GATEWAY) {
@@ -92,7 +92,7 @@ function loadMtlsCerts(clusterName) {
     };
 }
 
-// ── gRPC Channel Management ──────────────────────────────────
+// ── gRPC Channel Management ────────────────────────────────────
 
 let _openShellClient = null;
 let _inferenceClient = null;
@@ -148,9 +148,12 @@ export function getGrpcClients() {
     // Channel options — keep alive for persistent connection
     const options = {
         'grpc.keepalive_time_ms': 30000,
-        'grpc.keepalive_timeout_ms': 10000,
+        'grpc.keepalive_timeout_ms': 5000,
         'grpc.keepalive_permit_without_calls': 1,
         'grpc.max_receive_message_length': 16 * 1024 * 1024,  // 16MB
+        'grpc.initial_reconnect_backoff_ms': 500,
+        'grpc.max_reconnect_backoff_ms': 3000,
+        'grpc.dns_min_time_between_resolutions_ms': 5000,
     };
 
     _openShellClient = new OpenShellService(endpoint, credentials, options);
@@ -182,13 +185,15 @@ export function resetGrpcClients() {
     _clusterName = null;
 }
 
-// ── Promise Wrappers ────────────────────────────────────────
+// ── Promise Wrappers ────────────────────────────────────────────
 
 /** Wrap a gRPC unary call in a Promise. */
 function unary(client, method, request = {}, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
         const deadline = new Date(Date.now() + timeoutMs);
-        client[method](request, { deadline }, (err, response) => {
+        // waitForReady: false → fail immediately when channel is disconnected
+        // instead of queuing calls indefinitely behind reconnection
+        client[method](request, { deadline, waitForReady: false }, (err, response) => {
             if (err) {
                 reject(err);
             } else {
@@ -198,7 +203,25 @@ function unary(client, method, request = {}, timeoutMs = 15000) {
     });
 }
 
-// ── OpenShell Service Methods ─────────────────────────────────
+/**
+ * Race a promise against a hard timeout.
+ * Guards against gRPC deadline bugs where neither callback fires.
+ * @param {Promise} promise - The gRPC call promise.
+ * @param {number} ms - Hard timeout in milliseconds.
+ * @param {string} label - Label for timeout error message.
+ * @returns {Promise}
+ */
+export function raceWithTimeout(promise, ms, label = 'gRPC call') {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// ── OpenShell Service Methods ───────────────────────────────────
 
 /**
  * Check gateway health via gRPC Health RPC.
@@ -318,7 +341,7 @@ export async function getSandboxLogs(sandboxId, options = {}) {
     });
 }
 
-// ── Provider Methods ────────────────────────────────────────
+// ── Provider Methods ────────────────────────────────────────────
 
 export async function listProviders(limit = 100, offset = 0) {
     const clients = getGrpcClients();
@@ -335,13 +358,13 @@ export async function getProvider(name) {
 export async function createProvider(provider) {
     const clients = getGrpcClients();
     if (!clients) throw new Error('No gateway connection available');
-    return unary(clients.openShell, 'createProvider', { provider });
+    return unary(clients.openShell, 'createProvider', { provider }, 3000);
 }
 
 export async function updateProvider(provider) {
     const clients = getGrpcClients();
     if (!clients) throw new Error('No gateway connection available');
-    return unary(clients.openShell, 'updateProvider', { provider });
+    return unary(clients.openShell, 'updateProvider', { provider }, 3000);
 }
 
 export async function deleteProvider(name) {
@@ -350,7 +373,7 @@ export async function deleteProvider(name) {
     return unary(clients.openShell, 'deleteProvider', { name });
 }
 
-// ── Inference Methods ───────────────────────────────────────
+// ── Inference Methods ───────────────────────────────────────────
 
 /**
  * Get current cluster inference configuration.
@@ -386,7 +409,7 @@ export async function getInferenceBundle() {
     return unary(clients.inference, 'getInferenceBundle', {});
 }
 
-// ── Policy / Config Methods ─────────────────────────────────
+// ── Policy / Config Methods ─────────────────────────────────────
 
 /**
  * Get sandbox settings (policy + config).
@@ -476,7 +499,7 @@ export async function getDraftHistory(name) {
     return unary(clients.openShell, 'getDraftHistory', { name });
 }
 
-// ── Helpers ─────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────
 
 /** Map SandboxPhase proto enum to human-readable status. */
 export function mapPhaseToStatus(phase) {
