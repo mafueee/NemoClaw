@@ -3,15 +3,28 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ChatInterface } from './ChatInterface';
 
 vi.mock('../../api/client', async () => {
-    const listSandboxes = vi.fn().mockResolvedValue({
-        sandboxes: [{ name: 'my-sandbox', status: 'Ready', image: '', created: '' }],
-        raw: '',
+    const listClaws = vi.fn().mockResolvedValue({
+        ok: true,
+        claws: [{
+            id: 'my-claw',
+            sandboxName: 'my-sandbox',
+            gatewayName: 'nemoclaw',
+            status: 'running',
+            createdAt: new Date().toISOString(),
+            lastConnected: null,
+            config: { provider: 'openrouter', model: 'gpt-4o', endpointUrl: '' },
+        }],
     });
-    const sendChatMessage = vi.fn().mockResolvedValue({ ok: true, response: 'Hello from agent!' });
-    return { api: { listSandboxes, sendChatMessage } };
+    const sendChatMessage = vi.fn().mockResolvedValue({
+        ok: true,
+        response: 'Hello from agent!',
+        sandboxed: true,
+    });
+    return { api: { listClaws, sendChatMessage } };
 });
 
 const { api } = await import('../../api/client');
@@ -19,27 +32,35 @@ const { api } = await import('../../api/client');
 describe('ChatInterface', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        vi.mocked(api.listSandboxes).mockResolvedValue({
-            sandboxes: [{ name: 'my-sandbox', status: 'Ready', image: '', created: '' }],
-            raw: '',
+        vi.mocked(api.listClaws).mockResolvedValue({
+            ok: true,
+            claws: [{
+                id: 'my-claw',
+                sandboxName: 'my-sandbox',
+                gatewayName: 'nemoclaw',
+                status: 'running',
+                createdAt: new Date().toISOString(),
+                lastConnected: null,
+                config: { provider: 'openrouter', model: 'gpt-4o', endpointUrl: '' },
+            }],
         });
     });
 
     it('renders the page header', () => {
         render(<ChatInterface />);
-        expect(screen.getByText('💬 Agent Chat')).toBeInTheDocument();
+        expect(screen.getByText('\ud83d\udcac Claw Agent Chat')).toBeInTheDocument();
     });
 
-    it('shows sandbox selector', async () => {
+    it('shows claw selector', async () => {
         render(<ChatInterface />);
         await waitFor(() => {
-            expect(screen.getByTestId('chat-sandbox-selector')).toBeInTheDocument();
+            expect(screen.getByTestId('chat-claw-selector')).toBeInTheDocument();
         });
     });
 
     it('renders welcome message', () => {
         render(<ChatInterface />);
-        expect(screen.getAllByText(/Welcome to the OpenClaw Agent Chat/).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/Welcome to the Claw Agent Chat/).length).toBeGreaterThan(0);
     });
 
     it('does NOT mention CLI commands in the welcome message', () => {
@@ -53,24 +74,68 @@ describe('ChatInterface', () => {
         expect(screen.getAllByText('Send').length).toBeGreaterThan(0);
     });
 
-    it('shows no sandboxes message when empty', async () => {
-        vi.mocked(api.listSandboxes).mockResolvedValue({ sandboxes: [], raw: '' });
+    it('shows no claws message when empty', async () => {
+        vi.mocked(api.listClaws).mockResolvedValue({ ok: true, claws: [] });
         render(<ChatInterface />);
         await waitFor(() => {
-            expect(screen.getByText(/No sandboxes available/)).toBeInTheDocument();
+            expect(screen.getByText(/No claws available/)).toBeInTheDocument();
         });
     });
 
-    it('shows reconfigure link for API key errors', async () => {
+    it('sends message through sandbox and shows sandboxed badge', async () => {
+        const user = userEvent.setup();
         vi.mocked(api.sendChatMessage).mockResolvedValue({
-            ok: false,
-            response: 'Your inference API key appears to be corrupted',
-            error: 'Corrupted API key',
+            ok: true,
+            response: 'Pineapple!',
+            sandboxed: true,
         });
+
         render(<ChatInterface />);
         await waitFor(() => {
-            expect(screen.getAllByTestId('chat-sandbox-selector').length).toBeGreaterThan(0);
+            expect(screen.getByTestId('chat-claw-selector')).toBeInTheDocument();
         });
+
+        const textarea = screen.getByPlaceholderText(/Type a message/);
+        await user.type(textarea, 'say pineapple');
+        await user.click(screen.getByText('Send'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Pineapple!')).toBeInTheDocument();
+            expect(screen.getByTestId('badge-sandboxed')).toBeInTheDocument();
+            expect(screen.getByTestId('badge-sandboxed')).toHaveTextContent('Sandboxed');
+        });
+
+        // Verify the API was called with the claw's sandbox name
+        expect(api.sendChatMessage).toHaveBeenCalledWith('my-sandbox', 'say pineapple', expect.any(String));
+    });
+
+    it('shows bypassed badge when sandbox is bypassed', async () => {
+        const user = userEvent.setup();
+        vi.mocked(api.sendChatMessage).mockResolvedValue({
+            ok: true,
+            response: 'Hello via fallback',
+            sandboxed: false,
+            warning: 'Could not reach sandbox',
+        });
+
+        render(<ChatInterface />);
+        await waitFor(() => {
+            expect(screen.getByTestId('chat-claw-selector')).toBeInTheDocument();
+        });
+
+        const textarea = screen.getByPlaceholderText(/Type a message/);
+        await user.type(textarea, 'hello');
+        await user.click(screen.getByText('Send'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('badge-bypassed')).toBeInTheDocument();
+            expect(screen.getByText(/Bypassed/)).toBeInTheDocument();
+        });
+    });
+
+    it('hides page header when embedded', () => {
+        render(<ChatInterface clawId="my-claw" embedded />);
+        expect(screen.queryByText('\ud83d\udcac Claw Agent Chat')).toBeNull();
     });
 
     it('shows error for provider issues', async () => {
@@ -81,7 +146,7 @@ describe('ChatInterface', () => {
         });
         render(<ChatInterface />);
         await waitFor(() => {
-            expect(screen.getAllByTestId('chat-sandbox-selector').length).toBeGreaterThan(0);
+            expect(screen.getAllByTestId('chat-claw-selector').length).toBeGreaterThan(0);
         });
     });
 });
