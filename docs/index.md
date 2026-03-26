@@ -1,11 +1,11 @@
 ---
 title:
-  page: "NVIDIA NemoClaw Developer Guide"
+  page: "NemoClaw Developer Guide"
   nav: "NemoClaw"
-description: "NemoClaw is an open source reference stack that simplifies running OpenClaw always-on assistants more safely, with a single command."
-keywords: ["nemoclaw open source reference stack", "openclaw always-on assistants", "nvidia openshell", "nvidia nemotron"]
+description: "NemoClaw is a web-based management platform for running sandboxed AI agents with policy-enforced security and multi-provider inference routing."
+keywords: ["nemoclaw management platform", "openclaw sandbox management", "ai agent dashboard", "openshell gui"]
 topics: ["generative_ai", "ai_agents"]
-tags: ["openclaw", "openshell", "sandboxing", "inference_routing", "nemoclaw"]
+tags: ["openclaw", "openshell", "sandboxing", "inference_routing", "nemoclaw", "dashboard"]
 content:
   type: get_started
   difficulty: technical_beginner
@@ -18,7 +18,7 @@ status: published
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# NVIDIA NemoClaw
+# NemoClaw
 
 ```{include} ../README.md
 :start-after: <!-- start-badges -->
@@ -28,12 +28,11 @@ status: published
 ```{include} _includes/alpha-statement.md
 ```
 
-NVIDIA NemoClaw is an open source reference stack that simplifies running [OpenClaw](https://openclaw.ai) always-on assistants more safely.
-It installs the [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) runtime, part of NVIDIA Agent Toolkit, an environment designed for executing claws with additional security, and open source models like [NVIDIA Nemotron](https://build.nvidia.com).
+NemoClaw is a web-based management platform for running sandboxed AI agents safely. Built on [NVIDIA's NemoClaw](https://github.com/NVIDIA/NemoClaw) and the [OpenShell](https://github.com/NVIDIA/OpenShell) runtime, it provides a modern dashboard for deploying, managing, and monitoring AI agents with policy-enforced security, multi-provider inference routing, and native gRPC integration. No CLI required.
 
 ## Get Started
 
-Install the CLI and launch a sandboxed OpenClaw instance in a few commands.
+Launch the dashboard and deploy your first sandboxed agent in minutes.
 
 ```{raw} html
 <style>
@@ -79,15 +78,15 @@ Install the CLI and launch a sandboxed OpenClaw instance in a few commands.
     <span class="nc-term-dot nc-term-dot-g"></span>
   </div>
   <div class="nc-term-body">
-    <div><span class="nc-ps">$ </span>curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash</div>
+    <div><span class="nc-ps">$ </span>npm install -g nemoclaw</div>
+    <div><span class="nc-ps">$ </span>nemoclaw gui</div>
+    <div>&nbsp;</div>
+    <div><span class="nc-hl">Dashboard ready at http://localhost:3000</span></div>
   </div>
 </div>
 ```
 
-Run `nemoclaw --help` in your terminal to view the full CLI reference.
-You can also clone the [NemoClaw repository](https://github.com/NVIDIA/NemoClaw) to explore the plugin source and blueprint.
-
-Proceed to the [Quickstart](get-started/quickstart.md) for step-by-step instructions.
+Use the **Onboard Wizard** in the dashboard to deploy your first sandboxed agent with SSE-streamed progress updates. Or proceed to the [Quickstart](get-started/quickstart.md) for step-by-step instructions.
 
 ---
 
@@ -100,7 +99,7 @@ Proceed to the [Quickstart](get-started/quickstart.md) for step-by-step instruct
 :link: about/overview
 :link-type: doc
 
-Learn what NemoClaw does and how it integrates OpenClaw with OpenShell.
+Learn what NemoClaw does and how it extends NVIDIA's OpenShell platform.
 
 +++
 {bdg-secondary}`Concept`
@@ -110,27 +109,27 @@ Learn what NemoClaw does and how it integrates OpenClaw with OpenShell.
 :link: get-started/quickstart
 :link-type: doc
 
-Install the CLI, configure inference, and launch your first sandboxed agent.
+Install the platform and launch your first sandboxed agent from the dashboard.
 
 +++
 {bdg-secondary}`Tutorial`
+:::
+
+:::{grid-item-card} Architecture
+:link: reference/architecture
+:link-type: doc
+
+gRPC-native backend, React dashboard, and OpenShell gateway integration.
+
++++
+{bdg-secondary}`Reference`
 :::
 
 :::{grid-item-card} Commands
 :link: reference/commands
 :link-type: doc
 
-CLI commands for launching, connecting, monitoring, and managing sandboxes.
-
-+++
-{bdg-secondary}`Reference`
-:::
-
-:::{grid-item-card} Inference Profiles
-:link: reference/inference-profiles
-:link-type: doc
-
-NVIDIA endpoint inference configuration and available models.
+CLI commands for managing sandboxes, launching the dashboard, and more.
 
 +++
 {bdg-secondary}`Reference`
@@ -140,27 +139,27 @@ NVIDIA endpoint inference configuration and available models.
 :link: about/how-it-works
 :link-type: doc
 
-High-level overview of the plugin, blueprint, sandbox, and inference routing.
+Dashboard, gRPC integration, sandbox lifecycle, and inference routing.
 
 +++
 {bdg-secondary}`Concept`
 :::
 
-:::{grid-item-card} Architecture
-:link: reference/architecture
+:::{grid-item-card} Inference Providers
+:link: inference/switch-inference-providers
 :link-type: doc
 
-Plugin structure, blueprint system, and sandbox lifecycle.
+Configure NVIDIA Cloud, OpenRouter, Gemini, Ollama, vLLM, or NIM Local.
 
 +++
-{bdg-secondary}`Reference`
+{bdg-secondary}`How-To`
 :::
 
 :::{grid-item-card} Network Policies
 :link: reference/network-policies
 :link-type: doc
 
-Egress control, operator approval flow, and policy configuration.
+Egress control, operator approval flow, and policy customization.
 
 +++
 {bdg-secondary}`Reference`
@@ -170,7 +169,7 @@ Egress control, operator approval flow, and policy configuration.
 :link: workspace/workspace-files
 :link-type: doc
 
-Understand agent identity, memory, and configuration files that persist in the sandbox.
+Agent identity, memory, and configuration files that persist in the sandbox.
 
 +++
 {bdg-secondary}`Concept`

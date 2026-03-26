@@ -1,11 +1,11 @@
 ---
 title:
-  page: "NemoClaw Overview — What It Does and How It Fits Together"
+  page: "NemoClaw Overview — AI Agent Sandbox Management Platform"
   nav: "Overview"
-description: "NemoClaw is an open source reference stack that simplifies running OpenClaw always-on assistants safely."
-keywords: ["nemoclaw overview", "openclaw always-on assistants", "nvidia openshell", "nvidia nemotron"]
+description: "NemoClaw is a web-based management platform for running sandboxed AI agents with policy-enforced security, multi-provider inference, and real-time monitoring."
+keywords: ["nemoclaw overview", "ai agent sandbox platform", "openshell dashboard", "multi-provider inference"]
 topics: ["generative_ai", "ai_agents"]
-tags: ["openclaw", "openshell", "sandboxing", "inference_routing", "blueprints"]
+tags: ["openclaw", "openshell", "sandboxing", "inference_routing", "nemoclaw", "dashboard"]
 content:
   type: concept
   difficulty: technical_beginner
@@ -23,52 +23,51 @@ status: published
 ```{include} ../_includes/alpha-statement.md
 ```
 
-NVIDIA NemoClaw is an open source reference stack that simplifies running [OpenClaw](https://openclaw.ai) always-on assistants.
-It incorporates policy-based privacy and security guardrails, giving users control over their agents’ behavior and data handling.
-This enables self-evolving claws to run more safely in clouds, on prem, RTX PCs and DGX Spark.
+NemoClaw is a web-based management platform for running sandboxed AI agents safely. It wraps [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) with a modern dashboard, native gRPC integration, and multi-provider inference routing — giving you full control over agent deployment, security policy, and monitoring from a single browser tab.
 
-NemoClaw uses open source models, such as [NVIDIA Nemotron](https://build.nvidia.com), alongside the [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) runtime, part of the NVIDIA Agent Toolkit—a secure environment designed for executing claws more safely.
-By combining powerful open source models with built-in safety measures, NemoClaw simplifies and secures AI agent deployment.
+NemoClaw is built on [NVIDIA's NemoClaw](https://github.com/NVIDIA/NemoClaw), an open source reference stack originally designed to simplify running [OpenClaw](https://openclaw.ai) agents inside OpenShell sandboxes. We've extended the original CLI-based tool into a complete management platform while preserving the core security model that NVIDIA designed.
 
-| Capability              | Description                                                                                                                                          |
-|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Sandbox OpenClaw        | Creates an OpenShell sandbox pre-configured for OpenClaw, with filesystem and network policies applied from the first boot.                   |
-| Route inference         | Configures OpenShell inference routing so agent traffic flows through cloud-hosted Nemotron 3 Super 120B via [build.nvidia.com](https://build.nvidia.com). |
-| Manage the lifecycle    | Handles blueprint versioning, digest verification, and sandbox setup.                                                                                |
+## Capabilities
+
+| Capability | Description |
+|-----------|-------------|
+| **Web Dashboard** | Full GUI for sandbox lifecycle, inference config, policy management, agent chat, and real-time monitoring — no CLI required |
+| **Native gRPC Integration** | All operations use OpenShell's protobuf APIs directly — zero CLI subprocess calls |
+| **Multi-Provider Inference** | Route agent traffic through NVIDIA Cloud, OpenRouter, Google Gemini, Ollama, vLLM, or NIM Local |
+| **Multi-Claw Management** | Run multiple independent agent instances under a single gateway with per-claw config and monitoring |
+| **Sandbox Security** | OpenShell sandboxes with Landlock, seccomp, network namespace isolation, and declarative policy enforcement |
+| **Agent Chat** | Browser-based chat with server-side LLM proxy, multi-turn memory, and persistent credentials |
+| **Policy Automation** | Denial dashboard with AI-recommended policy changes, confidence scores, and approval workflows |
+| **Gateway Lifecycle** | Start, stop, and restart the OpenShell gateway from the dashboard with real-time health monitoring |
+| **Credential Vault** | Per-provider API key persistence — configure once, auto-fill on every deploy |
 
 ## Challenge
 
-Autonomous AI agents like OpenClaw can make arbitrary network requests, access the host filesystem, and call any inference endpoint. Without guardrails, this creates security, cost, and compliance risks that grow as agents run unattended.
+Autonomous AI agents can make arbitrary network requests, access the host filesystem, and call any inference endpoint. Without guardrails, this creates security, cost, and compliance risks that grow as agents run unattended. Managing these guardrails via CLI commands is tedious and error-prone.
 
-## Benefits
+## What NemoClaw Provides
 
-NemoClaw provides the following benefits.
-
-| Benefit                    | Description                                                                                                            |
-|----------------------------|------------------------------------------------------------------------------------------------------------------------|
-| Sandboxed execution        | Every agent runs inside an OpenShell sandbox with Landlock, seccomp, and network namespace isolation. No access is granted by default. |
-| NVIDIA Endpoint inference     | Agent traffic routes through cloud-hosted Nemotron 3 Super 120B via [build.nvidia.com](https://build.nvidia.com), transparent to the agent.          |
-| Declarative network policy | Egress rules are defined in YAML. Unknown hosts are blocked and surfaced to the operator for approval.                 |
-| Single CLI                 | The `nemoclaw` command orchestrates the full stack: gateway, sandbox, inference provider, and network policy.           |
-| Blueprint lifecycle        | Versioned blueprints handle sandbox creation, digest verification, and reproducible setup.                             |
+| Benefit | Description |
+|---------|-------------|
+| **GUI-driven management** | Every operation — sandbox creation, policy editing, inference config, agent interaction — is available through the web dashboard |
+| **Sandboxed execution** | Every agent runs inside an OpenShell sandbox with Landlock, seccomp, and network namespace isolation |
+| **Multi-provider inference** | Choose from six inference providers with transparent routing, persistent credentials, and runtime switching |
+| **Declarative policies** | Egress rules defined in YAML with visual editor, OPA validation, and AI-recommended policy updates |
+| **Real-time monitoring** | WebSocket-powered live status updates, log streaming via gRPC, and gateway health indicators |
+| **Native API integration** | Direct gRPC communication with the OpenShell gateway for reliable, high-performance operations |
 
 ## Use Cases
 
-You can use NemoClaw for various use cases including the following.
-
-| Use Case                  | Description                                                                                  |
-|---------------------------|----------------------------------------------------------------------------------------------|
-| Always-on assistant       | Run an OpenClaw assistant with controlled network access and operator-approved egress.        |
-| Sandboxed testing         | Test agent behavior in a locked-down environment before granting broader permissions.         |
-| Remote GPU deployment     | Deploy a sandboxed agent to a remote GPU instance for persistent operation.                   |
+| Use Case | Description |
+|----------|-------------|
+| **Development sandbox** | Deploy and iterate on agents in a locked-down environment with instant dashboard feedback |
+| **Always-on assistant** | Run an OpenClaw assistant with controlled network access, multi-turn chat, and operator-approved egress |
+| **Multi-agent setup** | Run multiple independent agents under one gateway, each with its own inference config and security policy |
+| **Policy prototyping** | Use the denial dashboard and YAML editor to iteratively build and validate security policies |
 
 ## Next Steps
 
-Explore the following pages to learn more about NemoClaw.
-
-- [How It Works](../about/how-it-works.md) to understand the key concepts behind NemoClaw.
-- [Quickstart](../get-started/quickstart.md) to install NemoClaw and run your first agent.
-- [Switch Inference Providers](../inference/switch-inference-providers.md) to configure the inference provider.
-- [Approve or Deny Network Requests](../network-policy/approve-network-requests.md) to manage egress approvals.
-- [Deploy to a Remote GPU Instance](../deployment/deploy-to-remote-gpu.md) for persistent operation.
-- [Monitor Sandbox Activity](../monitoring/monitor-sandbox-activity.md) to observe agent behavior.
+- [How It Works](../about/how-it-works.md) to understand the platform architecture.
+- [Quickstart](../get-started/quickstart.md) to install NemoClaw and launch the dashboard.
+- [Switch Inference Providers](../inference/switch-inference-providers.md) to configure multi-provider inference.
+- [Architecture](../reference/architecture.md) for the full technical reference.
