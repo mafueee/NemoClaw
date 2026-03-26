@@ -14,6 +14,7 @@ import {
     getGateways,
 } from '../services/clawManager.js';
 import * as grpcClient from '../lib/grpcClient.js';
+import { mapProviderToGrpcType } from '../lib/grpcClient.js';
 
 const router = Router();
 
@@ -133,7 +134,7 @@ router.post('/api/claws', async (req, res) => {
         try {
             await grpcClient.createProvider({
                 name: providerName,
-                type: providerType,
+                type: mapProviderToGrpcType(providerType),
                 credentials,
                 config,
             });
@@ -141,7 +142,7 @@ router.post('/api/claws', async (req, res) => {
             if (createErr.code === 6 /* ALREADY_EXISTS */) {
                 await grpcClient.updateProvider({
                     name: providerName,
-                    type: providerType,
+                    type: mapProviderToGrpcType(providerType),
                     credentials,
                     config,
                 });
