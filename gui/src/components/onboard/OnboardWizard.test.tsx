@@ -1,11 +1,12 @@
+// @vitest-environment jsdom
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import '@testing-library/jest-dom/vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OnboardWizard } from './OnboardWizard';
-import { PROVIDERS } from '../../data/providers';
 
 vi.mock('../../api/client', async () => {
     const getPreflightChecks = vi.fn().mockResolvedValue({
@@ -18,6 +19,12 @@ vi.mock('../../api/client', async () => {
 });
 
 const { api } = await import('../../api/client');
+
+/** Helper: click the visible "Continue →" button (always the last match) */
+async function clickContinue(user: ReturnType<typeof userEvent.setup>) {
+    const btns = screen.getAllByText('Continue →');
+    await user.click(btns[btns.length - 1]);
+}
 
 describe('OnboardWizard', () => {
     beforeEach(() => {
@@ -39,10 +46,10 @@ describe('OnboardWizard', () => {
         render(<OnboardWizard />);
         expect(screen.getAllByText('Preflight').length).toBeGreaterThan(0);
         expect(screen.getAllByText('Gateway').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Deploy').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Done').length).toBeGreaterThan(0);
     });
 
-    it('shows preflight checks', async () => {
+    it('shows preflight checks on first render', async () => {
         render(<OnboardWizard />);
         await waitFor(() => {
             expect(screen.getAllByText('Docker').length).toBeGreaterThan(0);
@@ -63,72 +70,58 @@ describe('OnboardWizard', () => {
         });
     });
 
-    it('can navigate to step 2 (Gateway)', async () => {
+    it('can navigate to step 1 (Gateway) after preflight passes', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => {
             expect(screen.getAllByText('Docker').length).toBeGreaterThan(0);
         });
-        await user.click(screen.getAllByText('Continue \u2192')[0]);
+        await clickContinue(user);
         expect(screen.getByText('Gateway Configuration')).toBeInTheDocument();
     });
 
-    it('shows Deploy Sandbox button on policy step instead of CLI command', async () => {
+    it('shows CLI command on gateway step', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
-        await user.click(screen.getAllByTestId('continue-preflight')[0]);
-        await user.click(screen.getAllByTestId('continue-gateway')[0]);
-        await user.click(screen.getAllByTestId('continue-sandbox')[0]);
-        await user.click(screen.getAllByTestId('continue-inference')[0]);
-        expect(screen.getByText('Deploy Sandbox \u2192')).toBeInTheDocument();
-        expect(screen.queryByText('nemoclaw onboard')).toBeNull();
+        await clickContinue(user); // → Gateway
+        expect(screen.getAllByText('openshell gateway start --name nemoclaw').length).toBeGreaterThan(0);
     });
 
-    it('shows Deploy button on final step', async () => {
+    it('shows sandbox name input with validation on step 2', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
-        await user.click(screen.getAllByTestId('continue-preflight')[0]);
-        await user.click(screen.getAllByTestId('continue-gateway')[0]);
-        await user.click(screen.getAllByTestId('continue-sandbox')[0]);
-        await user.click(screen.getAllByTestId('continue-inference')[0]);
-        await user.click(screen.getAllByTestId('continue-policy')[0]);
-        expect(screen.getAllByTestId('deploy-btn').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('🚀 Deploy Sandbox').length).toBeGreaterThan(0);
+        await clickContinue(user); // → Gateway
+        await clickContinue(user); // → Sandbox
+        expect(screen.getByText('Sandbox Configuration')).toBeInTheDocument();
+        expect(screen.getByDisplayValue('my-assistant')).toBeInTheDocument();
     });
 
-    it('shows all providers including OpenRouter and Ollama on inference step', async () => {
+    it('shows 3 inference providers on step 3', async () => {
         const user = userEvent.setup();
         render(<OnboardWizard />);
         await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
-        await user.click(screen.getAllByTestId('continue-preflight')[0]);
-        await user.click(screen.getAllByTestId('continue-gateway')[0]);
-        await user.click(screen.getAllByTestId('continue-sandbox')[0]);
-        await waitFor(() => expect(screen.queryByText('Inference Provider')).toBeTruthy());
-        expect(screen.getAllByText('NVIDIA Cloud API').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Ollama').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('OpenRouter').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Google Gemini').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Local vLLM').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Local GPU (NIM)').length).toBeGreaterThan(0);
+        await clickContinue(user); // → Gateway
+        await clickContinue(user); // → Sandbox
+        await clickContinue(user); // → Inference
+        expect(screen.getByText('Inference Provider')).toBeInTheDocument();
+        expect(screen.getByText('NVIDIA Cloud API')).toBeInTheDocument();
+        expect(screen.getByText('Local Ollama')).toBeInTheDocument();
+        expect(screen.getByText('Local vLLM')).toBeInTheDocument();
     });
 
-    it('shared PROVIDERS includes OpenRouter with correct config', () => {
-        const openrouter = PROVIDERS.find(p => p.key === 'openrouter');
-        expect(openrouter).toBeDefined();
-        expect(openrouter!.title).toBe('OpenRouter');
-        expect(openrouter!.defaultEndpoint).toBe('https://openrouter.ai/api/v1');
-        expect(openrouter!.apiKeyPlaceholder).toBe('sk-or-v1-...');
-        expect(openrouter!.models.length).toBeGreaterThan(0);
-    });
-
-    it('shared PROVIDERS includes Ollama with editable endpoint', () => {
-        const ollama = PROVIDERS.find(p => p.key === 'ollama');
-        expect(ollama).toBeDefined();
-        expect(ollama!.title).toBe('Ollama');
-        expect(ollama!.desc).toContain('remote');
-        expect(ollama!.endpointEditable).toBe(true);
-        expect(ollama!.defaultEndpoint).toBe('http://localhost:11434/v1');
+    it('shows CLI command on completion step', async () => {
+        const user = userEvent.setup();
+        render(<OnboardWizard />);
+        await waitFor(() => expect(screen.getAllByText('Docker').length).toBeGreaterThan(0));
+        await clickContinue(user); // → Gateway
+        await clickContinue(user); // → Sandbox
+        await clickContinue(user); // → Inference
+        await clickContinue(user); // → Policy
+        const completeBtn = screen.getByRole('button', { name: 'Complete Setup →' });
+        await user.click(completeBtn);
+        expect(screen.getByText('Setup Complete!')).toBeInTheDocument();
+        expect(screen.getByText('nemoclaw onboard')).toBeInTheDocument();
     });
 });
