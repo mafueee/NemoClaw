@@ -60,4 +60,28 @@ describe('ChatInterface', () => {
             expect(screen.getByText(/No sandboxes available/)).toBeInTheDocument();
         });
     });
+
+    it('shows reconfigure link for API key errors', async () => {
+        vi.mocked(api.sendChatMessage).mockResolvedValue({
+            ok: false,
+            response: 'Your inference API key appears to be corrupted',
+            error: 'Corrupted API key',
+        });
+        render(<ChatInterface />);
+        await waitFor(() => {
+            expect(screen.getAllByTestId('chat-sandbox-selector').length).toBeGreaterThan(0);
+        });
+    });
+
+    it('shows create sandbox link for missing OpenClaw', async () => {
+        vi.mocked(api.sendChatMessage).mockResolvedValue({
+            ok: false,
+            response: 'OpenClaw is not installed in this sandbox.',
+            error: 'openclaw not found',
+        });
+        render(<ChatInterface />);
+        await waitFor(() => {
+            expect(screen.getAllByTestId('chat-sandbox-selector').length).toBeGreaterThan(0);
+        });
+    });
 });
