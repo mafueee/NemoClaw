@@ -96,6 +96,10 @@ export default function App() {
                             onClick={closeSidebar}>
                             ✨ New Claw
                         </NavLink>
+                        <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            onClick={closeSidebar}>
+                            💬 Agent Chat
+                        </NavLink>
 
                         <div className="nav-section-title">Sandboxes</div>
                         <NavLink to="/sandboxes" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
@@ -105,10 +109,6 @@ export default function App() {
                         <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
                             onClick={closeSidebar}>
                             📋 Logs
-                        </NavLink>
-                        <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={closeSidebar}>
-                            💬 Agent Chat
                         </NavLink>
 
                         <div className="nav-section-title">Configuration</div>

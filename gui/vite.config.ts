@@ -6,6 +6,11 @@ export default defineConfig({
     build: {
         outDir: 'dist',
     },
+    test: {
+        environment: 'jsdom',
+        setupFiles: ['./src/test/setup.ts'],
+        globals: true,
+    },
     server: {
         proxy: {
             '/api': 'http://localhost:3000',
