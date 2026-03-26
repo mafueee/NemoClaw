@@ -152,7 +152,7 @@ export const api = {
 
     // Chat
     sendChatMessage: (sandboxName: string, message: string, sessionId?: string) =>
-        request<{ ok: boolean; response: string; error?: string }>('/chat/message', {
+        request<{ ok: boolean; response: string; error?: string; sandboxed?: boolean; warning?: string }>('/chat/message', {
             method: 'POST',
             body: JSON.stringify({ sandboxName, message, sessionId }),
         }),
@@ -234,6 +234,7 @@ export interface InferenceConfigData {
     provider?: string;
     providerLabel?: string;
     onboardedAt?: string;
+    apiKey?: string;
 }
 
 // Inference routing types
