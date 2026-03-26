@@ -260,7 +260,7 @@ NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP
 | **Sandbox delete** | `DeleteSandbox` | Clean sandbox teardown by name |
 | **Sandbox list/get** | `ListSandboxes` / `GetSandbox` | Structured sandbox state with phase, conditions, and policy version |
 | **Watch streams** | `WatchSandbox` (server-streaming) | Real-time status, logs, and platform events for deployment progress and log viewers |
-| **Agent execution** | `ExecSandbox` (server-streaming) | Run commands inside sandboxes — replaces SSH shell piping for the chat interface |
+| **Agent chat** | Direct OpenAI-compatible API | Server-side LLM proxy with per-session conversation memory — calls the provider's `/v1/chat/completions` endpoint directly |
 | **Health checks** | gRPC `Health` + HTTP `/readyz` | Gateway liveness and readiness with version info |
 | **Inference config** | `SetClusterInference` / `GetClusterInference` | Cluster-level inference routing (provider + model) |
 | **Provider CRUD** | `CreateProvider` / `UpdateProvider` / `DeleteProvider` / `ListProviders` | Inference provider credential management |
@@ -270,7 +270,7 @@ NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP
 
 ### Dashboard Backend Components
 
-- **`lib/grpcClient.js`** — Persistent gRPC channel with mTLS credential loading, connection pooling, typed async wrappers for all OpenShell and Inference RPCs, and **provider type mapping** (`mapProviderToGrpcType`) that translates GUI provider keys (e.g., `openrouter`, `gemini`) to gateway-supported types (`openai`, `anthropic`, `nvidia`).
+- **`lib/grpcClient.js`** — Persistent gRPC channel with mTLS credential loading, connection pooling, typed async wrappers for all OpenShell and Inference RPCs, **provider type mapping** (`mapProviderToGrpcType`), **config key mapping** (`mapProviderToConfigKey` — translates NemoClaw provider keys to gateway-expected config keys like `OPENAI_BASE_URL` and `NVIDIA_BASE_URL`), and **idempotent deployment helpers** (`ensureProvider` handles type conflicts via delete+recreate; `ensureSandbox` handles UNIQUE constraint violations).
 - **`lib/gatewayHealth.js`** — Health monitoring via gRPC Health RPC and HTTP `/readyz` endpoint. Reads gateway config from `~/.config/openshell/active_gateway` and `gateways/<name>/metadata.json`.
 - **`services/dockerGateway.js`** — Direct Docker Engine API communication over Unix socket for container lifecycle (start/stop/inspect). Requires Docker API ≥ v1.44.
 - **`routes/claws.js`** — Claw lifecycle routes using gRPC `CreateSandbox` + `WatchSandbox` for SSE-streamed deployment progress.
@@ -307,10 +307,10 @@ nemoclaw gui --port 8888
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via **gRPC CreateSandbox + WatchSandbox** with SSE-streamed progress. Uses a `setTimeout`-based state machine for reliable event delivery. Provider and inference configuration saved locally for resilience under gateway disk pressure. |
 | **Sandbox Manager** | List, inspect, start/stop, and **destroy** sandboxes with confirmation dialog and live status badges |
-| **Agent Chat** | Web-based chat interface that executes OpenClaw commands inside sandboxes via **gRPC ExecSandbox** streaming. Returns actionable error messages with recovery links when the sandbox is unreachable (SSH transport failure), OpenClaw is not installed (exit 127), or the API key is missing/corrupted. Includes server-side **API key format validation** and **persistent API key restoration** — keys saved via the Inference Config page are automatically restored into `process.env` on server restart. |
+| **Agent Chat** | Web-based chat interface that calls the configured LLM provider's OpenAI-compatible `/v1/chat/completions` API directly from the server. Supports **multi-turn conversation memory** per session (capped at 50 messages, 30-minute TTL). Returns actionable error messages with recovery links for authentication failures, provider unreachability, or missing API keys. Includes server-side **API key format validation** and **persistent API key restoration** — keys stored in the per-provider **credential vault** (`~/.nemoclaw/credentials.json`) are automatically restored into `process.env` on server restart. |
 | **Log Viewer** | Real-time log streaming via **gRPC WatchSandbox** with source and level filtering |
 | **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status. Includes a **YAML editor** with line numbers and **OPA rule validation** panel. |
-| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection. Includes a **Routing Transparency** panel showing resolved inference routes, matched protocols, and credential status. |
+| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection. API keys are persisted to a **per-provider credential vault** (`~/.nemoclaw/credentials.json`) — configure each provider's key once and all future deploys auto-fill from the vault. Includes a **Routing Transparency** panel showing resolved inference routes, matched protocols, and credential status. |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
 | **🐳 Container Images** | Build custom sandbox images from Dockerfiles with real-time SSE-streamed build output. Browse and manage your local image library. |
 | **⚖️ Denial Dashboard** | Surface AI-recommended policy changes from automated denial analysis. Review, approve, or reject draft policy chunks with confidence scores, rationale, security notes, and a decision history timeline. |
