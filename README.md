@@ -139,7 +139,7 @@ NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP
 | **Sandbox delete** | `DeleteSandbox` | Clean sandbox teardown by name |
 | **Sandbox list/get** | `ListSandboxes` / `GetSandbox` | Structured sandbox state with phase, conditions, and policy version |
 | **Watch streams** | `WatchSandbox` (server-streaming) | Real-time status, logs, and events for deployment progress and log viewers |
-| **Agent chat** | Direct LLM API proxy | Routes chat to the configured inference provider (OpenRouter, Gemini, NIM, etc.) after validating sandbox health via `GetSandbox` gRPC. |
+| **Agent chat** | `ExecSandbox` + `inference.local` | Executes `curl` inside the sandbox targeting `inference.local`, which the sandbox proxy intercepts and routes through the embedded `openshell-router`. Auth and model are rewritten automatically. Falls back to direct LLM proxy with warning if ExecSandbox fails. |
 | **Health checks** | gRPC `Health` + HTTP `/readyz` | Gateway liveness and readiness with version info |
 | **Inference config** | `SetClusterInference` / `GetClusterInference` | Cluster-level inference routing (provider + model) |
 | **Provider CRUD** | `CreateProvider` / `UpdateProvider` / `DeleteProvider` / `ListProviders` | Inference provider credential management |
@@ -231,7 +231,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
 | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
-| **Agent Chat** | Web-based chat routed to the configured inference provider. Sandbox health is validated via gRPC `GetSandbox` before routing. Multi-turn conversation history with 30-minute session TTL. |
+| **Agent Chat** | Web-based chat routed through the sandbox via `ExecSandbox` gRPC. Curl hits `inference.local` inside the sandbox, which the openshell-router intercepts and forwards to the configured backend. Falls back to direct LLM proxy with warning if transport fails. Multi-turn conversation history with 30-minute session TTL. |
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
 | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with line numbers and OPA rule validation. |
 | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to a per-provider credential vault. Includes Routing Transparency panel. |
@@ -397,7 +397,7 @@ We've extended the original into a full management platform by:
 - Building a comprehensive **web dashboard** with React and Vite
 - Adding **multi-provider inference** support (OpenRouter, Gemini, Ollama, vLLM, NIM)
 - Implementing **multi-claw management** for running independent agent instances
-- Adding **agent chat** with direct LLM inference routing and automatic sandbox health validation
+- Adding **agent chat** routed through sandbox `inference.local` via `ExecSandbox` gRPC for policy-constrained inference
 - Building a **denial dashboard** for AI-recommended policy approval
 - Adding **gateway lifecycle management** with Docker Engine API integration
 - Implementing a **credential vault** for persistent API key management
