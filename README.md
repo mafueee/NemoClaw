@@ -61,7 +61,7 @@ The dashboard opens at `http://localhost:3000`. Use the **Onboard Wizard** to de
 4. Name your sandbox and click **Deploy**.
 5. Watch real-time deployment progress via SSE-streamed updates.
 
-Once deployed, use the **Agent Chat** page to start talking to your agent directly from the browser.
+Once deployed, use the **Agent Chat** page (under Claws in the sidebar) to start chatting with your claw. Every response shows a **🔒 Sandboxed** or **⚠ Bypassed** badge so you can verify policy enforcement.
 
 ### CLI Quick Start
 
@@ -231,7 +231,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
 | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
-| **Agent Chat** | Web-based chat routed through the sandbox via `ExecSandbox` gRPC. Curl hits `inference.local` inside the sandbox, which the openshell-router intercepts and forwards to the configured backend. Falls back to direct LLM proxy with warning if transport fails. Multi-turn conversation history with 30-minute session TTL. |
+| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Select a claw (not a raw sandbox) to chat with — the underlying sandbox name is resolved automatically. Every response displays a **🔒 Sandboxed** or **⚠ Bypassed** badge showing whether inference was policy-constrained. Falls back to direct LLM proxy with warning if transport fails. Also available as an embedded tab inside each Claw Detail page. |
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
 | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with line numbers and OPA rule validation. |
 | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to a per-provider credential vault. Includes Routing Transparency panel. |
@@ -259,7 +259,7 @@ NemoClaw supports running **multiple independent claw instances** under a single
 |------|-------|-------------|
 | **All Claws** | `/claws` | Card grid with status badges, filtering, sync, and quick actions |
 | **New Claw** | `/claws/new` | Deploy form with gateway selector, provider picker, and SSE-streamed progress |
-| **Claw Detail** | `/claws/:id` | Five-tab detail view: Overview, Monitor, Logs, Config, Policy |
+| **Claw Detail** | `/claws/:id` | Six-tab detail view: Overview, Chat, Monitor, Logs, Config, Policy |
 
 ### API Endpoints
 
