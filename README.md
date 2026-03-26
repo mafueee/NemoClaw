@@ -1,197 +1,162 @@
-# NVIDIA NemoClaw: Reference Stack for Running OpenClaw in OpenShell
+# NemoClaw — AI Agent Sandbox Management Platform
 
 <!-- start-badges -->
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](https://github.com/NVIDIA/NemoClaw/blob/main/LICENSE)
-[![Security Policy](https://img.shields.io/badge/Security-Report%20a%20Vulnerability-red)](https://github.com/NVIDIA/NemoClaw/blob/main/SECURITY.md)
-[![Project Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/NVIDIA/NemoClaw/blob/main/docs/about/release-notes.md)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](LICENSE)
+[![Project Status](https://img.shields.io/badge/status-alpha-orange)](docs/about/release-notes.md)
 <!-- end-badges -->
 
 <!-- start-intro -->
-NVIDIA NemoClaw is an open source reference stack that simplifies running [OpenClaw](https://openclaw.ai) always-on assistants more safely.
-It installs the [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) runtime, part of NVIDIA Agent Toolkit, which provides additional security for running autonomous agents.
-It also includes open source models such as [NVIDIA Nemotron](https://build.nvidia.com).
+NemoClaw is a web-based management platform for running sandboxed AI agents with policy-enforced security, multi-provider inference routing, and real-time monitoring. It provides a modern dashboard for deploying, managing, and chatting with AI agents running inside isolated [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes.
 <!-- end-intro -->
+
+> **Origins**
+>
+> NemoClaw is built on [NVIDIA's NemoClaw](https://github.com/NVIDIA/NemoClaw), an open source reference stack for running [OpenClaw](https://openclaw.ai) agents safely inside OpenShell sandboxes. We've extended the original CLI-based tool into a full GUI-driven management platform with native gRPC integration, multi-provider inference, and a comprehensive web dashboard — while preserving the core sandbox security model that NVIDIA designed.
 
 > **Alpha software**
 >
-> NemoClaw is available in early preview starting March 16, 2026.
-> This software is not production-ready.
-> Interfaces, APIs, and behavior may change without notice as we iterate on the design.
-> The project is shared to gather feedback and enable early experimentation.
-> We welcome issues and discussion from the community while the project evolves.
+> NemoClaw is in active development. Interfaces, APIs, and behavior may change without notice.
 
 ---
 
 ## Quick Start
 
-Follow these steps to get started with NemoClaw and your first sandboxed OpenClaw agent.
+### Prerequisites
 
-> **ℹ️ Note**
->
-> NemoClaw creates a fresh OpenClaw instance inside the sandbox during onboarding.
+| Dependency | Version |
+|------------|--------|
+| Linux | Ubuntu 22.04 LTS or later |
+| Node.js | 20 or later |
+| npm | 10 or later |
+| Docker | Installed and running |
+| [OpenShell](https://github.com/NVIDIA/OpenShell) | Installed |
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 4 vCPU | 4+ vCPU |
+| RAM | 8 GB | 16 GB |
+| Disk | 20 GB free | 40 GB free |
+
+### Install and Launch
+
+```bash
+# Clone the repository
+git clone https://github.com/<your-org>/NemoClaw.git
+cd NemoClaw
+
+# Install CLI globally
+npm install -g .
+
+# Launch the web dashboard
+nemoclaw gui
+```
+
+The dashboard opens at `http://localhost:3000`. Use the **Onboard Wizard** to deploy your first sandboxed agent — no CLI commands required.
+
+### Onboard Your First Agent
+
+1. Open the dashboard and click **Onboard** in the sidebar.
+2. Select an inference provider (NVIDIA Cloud, OpenRouter, Ollama, Gemini, vLLM, or NIM Local).
+3. Enter your API key — it's stored in the credential vault and auto-filled on future deploys.
+4. Name your sandbox and click **Deploy**.
+5. Watch real-time deployment progress via SSE-streamed updates.
+
+Once deployed, use the **Agent Chat** page to start talking to your agent directly from the browser.
+
+### CLI Quick Start
+
+If you prefer the command line:
+
+```bash
+# Interactive setup wizard
+nemoclaw onboard
+
+# Connect to a running sandbox
+nemoclaw my-assistant connect
+
+# Check sandbox status
+nemoclaw my-assistant status
+```
+
+Every command supports `--help`. Commands like `list`, `status`, and `policy-list` accept `--json` for scripted consumption.
 
 <!-- start-quickstart-guide -->
 
-### Prerequisites
-
-Check the prerequisites before you start to ensure you have the necessary software and hardware to run NemoClaw.
-
-#### Hardware
-
-| Resource | Minimum        | Recommended      |
-|----------|----------------|------------------|
-| CPU      | 4 vCPU         | 4+ vCPU          |
-| RAM      | 8 GB           | 16 GB            |
-| Disk     | 20 GB free     | 40 GB free       |
-
-The sandbox image is approximately 2.4 GB compressed. During image push, the Docker daemon, k3s, and the OpenShell gateway run alongside the export pipeline, which buffers decompressed layers in memory. On machines with less than 8 GB of RAM, this combined usage can trigger the OOM killer. If you cannot add memory, configuring at least 8 GB of swap can work around the issue at the cost of slower performance.
-
-#### Software
-
-| Dependency | Version                          |
-|------------|----------------------------------|
-| Linux      | Ubuntu 22.04 LTS or later |
-| Node.js    | 20 or later |
-| npm        | 10 or later |
-| Container runtime | Supported runtime installed and running |
-| [OpenShell](https://github.com/NVIDIA/OpenShell) | Installed |
-
-#### Container Runtime Support
-
-| Platform | Supported runtimes | Notes |
-|----------|--------------------|-------|
-| Linux | Docker | Primary supported path today |
-| macOS (Apple Silicon) | Colima, Docker Desktop | Recommended runtimes for supported macOS setups |
-| macOS | Podman | Not supported yet. NemoClaw currently depends on OpenShell support for Podman on macOS. |
-| Windows WSL | Docker Desktop (WSL backend) | Supported target path |
-
-> **💡 Tip**
->
-> For DGX Spark, follow the [DGX Spark setup guide](https://github.com/NVIDIA/NemoClaw/blob/main/spark-install.md). It covers Spark-specific prerequisites, such as cgroup v2 and Docker configuration, before running the standard installer.
-
-### Install NemoClaw and Onboard OpenClaw Agent
-
-Download and run the installer script.
-The script installs Node.js if it is not already present, then runs the guided onboard wizard to create a sandbox, configure inference, and apply security policies.
-
-```bash
-curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
-```
-
-If you use nvm or fnm to manage Node.js, the installer may not update your current shell's PATH.
-If `nemoclaw` is not found after install, run `source ~/.bashrc` (or `source ~/.zshrc` for zsh) or open a new terminal.
-
-When the install completes, a summary confirms the running environment:
-
-```
-──────────────────────────────────────────────────
-Sandbox      my-assistant (Landlock + seccomp + netns)
-Model        nvidia/nemotron-3-super-120b-a12b (NVIDIA Endpoint API)
-──────────────────────────────────────────────────
-Run:         nemoclaw my-assistant connect
-Status:      nemoclaw my-assistant status
-Logs:        nemoclaw my-assistant logs --follow
-──────────────────────────────────────────────────
-
-[INFO]  === Installation complete ===
-```
-
-### Chat with the Agent
-
-Connect to the sandbox, then chat with the agent through the TUI or the CLI.
-
-#### Connect to the Sandbox
-
-Run the following command to connect to the sandbox:
-
-```bash
-nemoclaw my-assistant connect
-```
-
-This connects you to the sandbox shell `sandbox@my-assistant:~$` where you can run `openclaw` commands.
-
-#### OpenClaw TUI
-
-In the sandbox shell, run the following command to open the OpenClaw TUI, which opens an interactive chat interface.
-
-```bash
-openclaw tui
-```
-
-Send a test message to the agent and verify you receive a response.
-
-> **ℹ️ Note**
->
-> The TUI is best for interactive back-and-forth. If you need the full text of a long response such as a large code generation output, use the CLI instead.
-
-#### OpenClaw CLI
-
-In the sandbox shell, run the following command to send a single message and print the response:
-
-```bash
-openclaw agent --agent main --local -m "hello" --session-id test
-```
-
-This prints the complete response directly in the terminal and avoids relying on the TUI view for long output.
-
 ### Uninstall
 
-To remove NemoClaw and all resources created during setup, in the terminal outside the sandbox, run:
+To remove NemoClaw and all resources:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash
+nemoclaw uninstall
 ```
 
-The script removes sandboxes, the NemoClaw gateway and providers, related Docker images and containers, local state directories, and the global `nemoclaw` npm package. It does not remove shared system tooling such as Docker, Node.js, npm, or Ollama.
-
-| Flag               | Effect                                              |
+| Flag | Effect |
 |--------------------|-----------------------------------------------------|
-| `--yes`            | Skip the confirmation prompt.                       |
-| `--keep-openshell` | Leave the `openshell` binary installed.              |
-| `--delete-models`  | Also remove NemoClaw-pulled Ollama models.           |
-
-For example, to skip the confirmation prompt:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash -s -- --yes
-```
-
-### CLI Tips
-
-Every command supports `--help` to print usage, options, and examples:
-
-```bash
-nemoclaw list --help
-nemoclaw gui --help
-nemoclaw <name> destroy --help
-```
-
-Commands `list`, `status`, and `<name> policy-list` accept `--json` for scripted consumption:
-
-```bash
-nemoclaw list --json | jq '.sandboxes[].name'
-nemoclaw status --json
-nemoclaw my-assistant policy-list --json
-```
+| `--yes` | Skip the confirmation prompt. |
+| `--keep-openshell` | Leave the `openshell` binary installed. |
+| `--delete-models` | Also remove NemoClaw-pulled Ollama models. |
 
 <!-- end-quickstart-guide -->
 
 ---
 
-## How It Works
+## Architecture
 
-NemoClaw installs the NVIDIA OpenShell runtime and Nemotron models, then uses a versioned blueprint to create a sandboxed environment where every network request, file access, and inference call is governed by declarative policy. The `nemoclaw` CLI orchestrates the full stack: OpenShell gateway, sandbox, inference provider, and network policy.
+NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP** — the dashboard backend contains **zero CLI subprocess calls**. All sandbox lifecycle, inference routing, provider management, policy updates, log streaming, and agent execution use the same protobuf APIs that the gateway exposes.
 
-| Component        | Role                                                                                      |
-|------------------|-------------------------------------------------------------------------------------------|
-| **Plugin**       | TypeScript CLI commands for launch, connect, status, and logs.                            |
-| **Blueprint**    | Versioned Python artifact that orchestrates sandbox creation, policy, and inference setup. |
-| **Sandbox**      | Isolated OpenShell container running OpenClaw with policy-enforced egress and filesystem.  |
-| **Inference**    | NVIDIA Endpoint model calls, routed through the OpenShell gateway, transparent to the agent.  |
+```
+┌─────────────────────────────────────────────────┐
+│  Web Dashboard (React + Vite)                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
+│  │ Onboard  │ │ Sandbox  │ │ Agent Chat       │ │
+│  │ Wizard   │ │ Manager  │ │ Policy Editor    │ │
+│  │ Log View │ │ Inference│ │ Denial Dashboard │ │
+│  └──────────┘ └──────────┘ └──────────────────┘ │
+└──────────────────┬──────────────────────────────┘
+                   │ REST / WebSocket / SSE
+┌──────────────────▼──────────────────────────────┐
+│  Express Backend (Node.js)                      │
+│  ┌──────────────┐ ┌────────────┐ ┌────────────┐ │
+│  │ grpcClient.js│ │ gateway    │ │ docker     │ │
+│  │ (mTLS)       │ │ Health.js  │ │ Gateway.js │ │
+│  └──────┬───────┘ └──────┬─────┘ └──────┬─────┘ │
+└─────────┼────────────────┼──────────────┼───────┘
+          │ gRPC (mTLS)    │ Health RPC   │ Unix socket
+┌─────────▼────────────────▼──────────────▼───────┐
+│  OpenShell Gateway                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
+│  │ Sandbox  │ │ Inference│ │ Policy           │ │
+│  │ Manager  │ │ Router   │ │ Enforcer         │ │
+│  └──────────┘ └──────────┘ └──────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
 
-The blueprint lifecycle follows four stages: resolve the artifact, verify its digest, plan the resources, and apply through the OpenShell CLI.
+### Native gRPC Integration
 
-When something goes wrong, errors may originate from either NemoClaw or the OpenShell layer underneath. Run `nemoclaw <name> status` for NemoClaw-level health and `openshell sandbox list` to check the underlying sandbox state.
+| Operation | gRPC RPC | Description |
+|-----------|----------|-------------|
+| **Sandbox create** | `CreateSandbox` | Create sandboxes with typed `SandboxSpec` protobuf messages |
+| **Sandbox delete** | `DeleteSandbox` | Clean sandbox teardown by name |
+| **Sandbox list/get** | `ListSandboxes` / `GetSandbox` | Structured sandbox state with phase, conditions, and policy version |
+| **Watch streams** | `WatchSandbox` (server-streaming) | Real-time status, logs, and events for deployment progress and log viewers |
+| **Agent chat** | Direct OpenAI-compatible API | Server-side LLM proxy with per-session conversation memory |
+| **Health checks** | gRPC `Health` + HTTP `/readyz` | Gateway liveness and readiness with version info |
+| **Inference config** | `SetClusterInference` / `GetClusterInference` | Cluster-level inference routing (provider + model) |
+| **Provider CRUD** | `CreateProvider` / `UpdateProvider` / `DeleteProvider` / `ListProviders` | Inference provider credential management |
+| **Policy management** | `UpdateConfig` / `GetSandboxConfig` | Sandbox and global policy updates |
+| **Draft policy** | `GetDraftPolicy` / `ApproveDraftChunk` / `RejectDraftChunk` | Automated policy recommendations from denial analysis |
+| **Authentication** | mTLS | Client certificates from `~/.config/openshell/clusters/<name>/mtls/` |
+
+### Backend Components
+
+| Component | Purpose |
+|-----------|--------|
+| **`lib/grpcClient.js`** | Persistent gRPC channel with mTLS, typed async wrappers for all RPCs, provider type mapping, config key mapping, and idempotent deployment helpers |
+| **`lib/gatewayHealth.js`** | Health monitoring via gRPC Health RPC and HTTP `/readyz` endpoint |
+| **`services/dockerGateway.js`** | Direct Docker Engine API over Unix socket for container lifecycle (start/stop/inspect) |
+| **`routes/claws.js`** | Claw lifecycle routes with gRPC `CreateSandbox` + `WatchSandbox` for SSE-streamed deployment |
+| **`services/clawManager.js`** | Claw registry with gRPC-backed sandbox status enrichment |
+| **`server/proto/`** | OpenShell protobuf definitions (`openshell.proto`, `inference.proto`, `datamodel.proto`, `sandbox.proto`) |
 
 ---
 
@@ -199,17 +164,16 @@ When something goes wrong, errors may originate from either NemoClaw or the Open
 
 Inference requests from the agent never leave the sandbox directly. OpenShell intercepts every call and routes it to the configured provider.
 
-| Provider     | Model                               | Use Case                                       |
-|--------------|--------------------------------------|-------------------------------------------------|
-| NVIDIA Endpoint | `nvidia/nemotron-3-super-120b-a12b` | Production. Requires an NVIDIA API key.         |
-| Ollama       | `llama3.3:latest`, etc.             | Local or remotely hosted Ollama server.         |
-| OpenRouter   | `anthropic/claude-sonnet-4`, etc.          | 200+ models via openrouter.ai. Requires an API key. |
-| vLLM         | Auto-detected                       | High-performance local inference server.        |
-| NIM Local    | `nvidia/nemotron-3-nano-30b-a3b`    | On-premise NVIDIA NIM container.                |
+| Provider | Model | Use Case |
+|----------|-------|----------|
+| NVIDIA Cloud | `nvidia/nemotron-3-super-120b-a12b` | Production. Requires an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). |
+| Ollama | `llama3.3:latest`, etc. | Local or remote Ollama server. |
+| OpenRouter | `google/gemini-3-flash-preview`, etc. | 200+ models via [openrouter.ai](https://openrouter.ai). Requires an API key. |
+| Google Gemini | Gemini models | Direct Google AI access. Requires an API key. |
+| vLLM | Auto-detected | High-performance local inference server. |
+| NIM Local | `nvidia/nemotron-3-nano-30b-a3b` | On-premise NVIDIA NIM container. |
 
-Get an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). Get an OpenRouter API key from [openrouter.ai/keys](https://openrouter.ai/keys). The `nemoclaw onboard` command prompts for provider selection during setup, or use the web dashboard's Inference Config page.
-
-Ollama supports connecting to remote servers — set the endpoint URL in the dashboard or via environment variable. vLLM and NIM local options require a running server on the configured endpoint.
+Configure providers through the **Inference Config** page in the dashboard, or during onboarding. API keys are persisted to a per-provider **credential vault** (`~/.nemoclaw/credentials.json`) — configure each provider's key once and all future deploys auto-fill from the vault.
 
 ---
 
@@ -217,40 +181,37 @@ Ollama supports connecting to remote servers — set the endpoint URL in the das
 
 The sandbox starts with a default policy that controls network egress and filesystem access:
 
-| Layer      | What it protects                                    | When it applies             |
-|------------|-----------------------------------------------------|-----------------------------|
-| Network    | Blocks unauthorized outbound connections.           | Hot-reloadable at runtime.  |
-| Filesystem | Prevents reads/writes outside `/sandbox` and `/tmp`.| Locked at sandbox creation. |
-| Process    | Blocks privilege escalation and dangerous syscalls. | Locked at sandbox creation. |
-| Inference  | Reroutes model API calls to controlled backends.    | Hot-reloadable at runtime.  |
+| Layer | What it protects | When it applies |
+|------------|-----------------------------------------------------|----------------------------|
+| Network | Blocks unauthorized outbound connections. | Hot-reloadable at runtime. |
+| Filesystem | Prevents reads/writes outside `/sandbox` and `/tmp`. | Locked at sandbox creation. |
+| Process | Blocks privilege escalation and dangerous syscalls. | Locked at sandbox creation. |
+| Inference | Reroutes model API calls to controlled backends. | Hot-reloadable at runtime. |
 
-When the agent tries to reach an unlisted host, OpenShell blocks the request and surfaces it in the TUI for operator approval.
+When the agent tries to reach an unlisted host, OpenShell blocks the request and surfaces it for operator approval.
 
 ---
 
 ## Configuring Sandbox Policy
 
-The sandbox policy is defined in a declarative YAML file and enforced by the OpenShell runtime.
-NemoClaw ships a default policy in [`nemoclaw-blueprint/policies/openclaw-sandbox.yaml`](https://github.com/NVIDIA/NemoClaw/blob/main/nemoclaw-blueprint/policies/openclaw-sandbox.yaml) that denies all network egress except explicitly listed endpoints.
+The sandbox policy is defined in declarative YAML and enforced by the OpenShell runtime. NemoClaw ships a default policy that denies all network egress except explicitly listed endpoints.
 
 Operators can customize the policy in two ways:
 
 | Method | How | Scope |
 |--------|-----|-------|
-| **Static** | Edit `openclaw-sandbox.yaml` and re-run `nemoclaw onboard`. | Persists across restarts. |
-| **Dynamic** | Run `openshell policy set <policy-file>` on a running sandbox. | Session only; resets on restart. |
+| **Dashboard** | Use the Policy Editor to view, apply, and edit YAML policies with OPA validation | Persists per sandbox |
+| **Static** | Edit `openclaw-sandbox.yaml` and re-deploy | Persists across restarts |
 
-NemoClaw includes preset policy files for common integrations such as PyPI, Docker Hub, Slack, and Jira in `nemoclaw-blueprint/policies/presets/`. Apply a preset as-is or use it as a starting template.
+NemoClaw includes preset policy files for common integrations such as PyPI, Docker Hub, Slack, and Jira in `nemoclaw-blueprint/policies/presets/`.
 
-NemoClaw is an open project — we are still determining which presets to ship by default. If you have suggestions, please open an [issue](https://github.com/NVIDIA/NemoClaw/issues) or [discussion](https://github.com/NVIDIA/NemoClaw/discussions).
+The **Denial Dashboard** surfaces AI-recommended policy changes from automated denial analysis. Review, approve, or reject draft policy chunks with confidence scores, rationale, and security notes.
 
-When the agent attempts to reach an endpoint not covered by the policy, OpenShell blocks the request and surfaces it in the TUI (`openshell term`) for the operator to approve or deny in real time. Approved endpoints persist for the current session only.
-
-For step-by-step instructions, see [Customize Network Policy](https://docs.nvidia.com/nemoclaw/latest/network-policy/customize-network-policy.html). For the underlying enforcement details, see the OpenShell [Policy Schema](https://docs.nvidia.com/openshell/latest/reference/policy-schema.html) and [Sandbox Policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.html) documentation.
+---
 
 ## Web Dashboard
 
-NemoClaw includes a modern web dashboard that provides a visual interface for managing sandboxes, configuring inference, and monitoring the system.
+NemoClaw's primary interface is a modern web dashboard for managing every aspect of the platform.
 
 ### Launch the Dashboard
 
@@ -258,11 +219,7 @@ NemoClaw includes a modern web dashboard that provides a visual interface for ma
 nemoclaw gui
 ```
 
-This opens the dashboard at `http://localhost:3000`. Use `--port` to specify a different port:
-
-```bash
-nemoclaw gui --port 8888
-```
+Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 
 ### Dashboard Features
 
@@ -270,40 +227,116 @@ nemoclaw gui --port 8888
 
 | Feature | Description |
 |---------|-------------|
-| **Dashboard** | Sandbox overview with real-time health status, quick actions, and gateway **Start/Stop** control |
-| **🔔 Live Updates** | WebSocket-powered real-time sandbox status changes pushed to the dashboard |
-| **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
-| **Onboard Wizard** | Step-by-step GUI that **deploys sandboxes directly** via async SSE streaming with real-time progress (preflight → gateway → sandbox → inference → policy). Passes provider config, API keys, and model selection to the CLI automatically |
-| **Sandbox Manager** | List, inspect, start/stop, and **destroy** sandboxes with confirmation dialog and live status badges |
-| **Agent Chat** | Web-based chat interface that **connects directly** to the OpenClaw agent inside the sandbox |
-| **Log Viewer** | Real-time log streaming with search and filtering |
-| **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status |
-| **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection |
+| **Dashboard** | Sandbox overview with real-time health status, quick actions, and gateway Start/Stop control. A global gateway banner appears on every page when the gateway is offline. |
+| **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
+| **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
+| **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
+| **Agent Chat** | Web-based chat with multi-turn conversation memory (50 messages, 30-min TTL). Calls the configured LLM provider's OpenAI-compatible API directly. Includes API key validation and persistent credential restoration. |
+| **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
+| **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with line numbers and OPA rule validation. |
+| **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to a per-provider credential vault. Includes Routing Transparency panel. |
+| **⚖️ Denial Dashboard** | AI-recommended policy changes from denial analysis. Review, approve, or reject draft policy chunks with confidence scores and decision history. |
+| **🔀 Gateway Lifecycle** | Dedicated gateway page with Start/Stop/Restart controls, container details, and health monitoring. Live health indicator in sidebar. |
+| **🐳 Container Images** | Build custom sandbox images from Dockerfiles with real-time SSE-streamed build output. |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
+| **🔔 Live Updates** | WebSocket-powered real-time sandbox and claw status changes pushed to the dashboard |
+| **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
+
+### Multi-Claw Management
+
+NemoClaw supports running **multiple independent claw instances** under a single OpenShell gateway. Each claw has its own inference configuration, lifecycle, and monitoring.
+
+| Concept | Description |
+|---------|-------------|
+| **Claw** | A named sandbox instance tracked by NemoClaw with its own config and lifecycle |
+| **Gateway** | The OpenShell gateway that hosts one or more claws |
+| **Registry** | Local metadata store (`~/.nemoclaw/claws.json`) that tracks claw config and state |
+| **Sync** | Discovery process that cross-references the registry with live sandbox state |
+
+#### Dashboard Claw Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| **All Claws** | `/claws` | Card grid with status badges, filtering, sync, and quick actions |
+| **New Claw** | `/claws/new` | Deploy form with gateway selector, provider picker, and SSE-streamed progress |
+| **Claw Detail** | `/claws/:id` | Five-tab detail view: Overview, Monitor, Logs, Config, Policy |
+
+### API Endpoints
+
+#### Claw Lifecycle
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/claws` | List all registered claws |
+| `POST` | `/api/claws` | Create a new claw (SSE-streamed deployment) |
+| `GET` | `/api/claws/:id` | Get a specific claw |
+| `GET` | `/api/claws/:id/status` | Get claw status with sandbox cross-reference |
+| `POST` | `/api/claws/:id/reconnect` | Reconnect to a running claw |
+| `PUT` | `/api/claws/:id/config` | Update claw inference configuration |
+| `DELETE` | `/api/claws/:id` | Destroy a claw |
+| `POST` | `/api/claws/sync` | Sync registry with live sandbox state |
+| `GET` | `/api/claws/gateways` | List available gateways |
+
+#### Providers
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/providers` | List all inference providers |
+| `POST` | `/api/providers` | Create a new provider |
+| `GET` | `/api/providers/:name` | Get a specific provider |
+| `PUT` | `/api/providers/:name` | Update a provider |
+| `DELETE` | `/api/providers/:name` | Delete a provider |
+
+#### Gateway Lifecycle
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/gateway/status` | Gateway container status via Docker API |
+| `POST` | `/api/gateway/start` | Start the gateway container |
+| `POST` | `/api/gateway/stop` | Stop the gateway container |
+
+#### Custom Image Builder
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/images` | List local container images |
+| `POST` | `/api/images/build` | Build custom image (SSE-streamed output) |
+| `DELETE` | `/api/images/:tag` | Remove a container image |
+
+#### Policy Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/policies/:sandbox/config` | Get sandbox policy as YAML |
+| `PUT` | `/api/policies/:sandbox/config` | Validate and apply policy from YAML |
+| `POST` | `/api/policies/validate` | OPA rule validation (dry-run) |
+| `GET` | `/api/policies/:sandbox/drafts` | Get pending draft policy chunks |
+| `POST` | `/api/policies/drafts/approve` | Approve a draft chunk |
+| `POST` | `/api/policies/drafts/reject` | Reject a draft chunk |
+| `GET` | `/api/policies/:sandbox/drafts/history` | Decision history timeline |
+
+#### Inference Routing
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/inference/routes` | Resolved inference routes with credential status |
 
 ### WebSocket Live Updates
 
 The dashboard uses a WebSocket connection (`/ws`) to receive real-time status updates:
 
-- **Sandbox status** — sandbox list changes (create, destroy, status transitions) are pushed automatically.
-- **Gateway health** — gateway connection state is monitored and broadcast to all connected clients.
-- **Auto-reconnect** — the frontend reconnects automatically with exponential backoff if the connection drops.
-- **Visual feedback** — sandbox cards flash with a green glow animation when their status changes in real time.
+- **Sandbox status** — create, destroy, and status transitions pushed automatically
+- **Gateway health** — connection state monitored and broadcast to all clients
+- **Auto-reconnect** — exponential backoff on connection drop
+- **Visual feedback** — sandbox cards flash with a green glow on status changes
 
 ### Responsive Design
 
-The dashboard adapts to three breakpoint tiers:
-
 | Breakpoint | Target | Key Adaptations |
 |------------|--------|-----------------|
-| ≤480px | Phone | Single-column layout, stacked controls, mobile header with hamburger menu |
-| ≤768px | Tablet | Sidebar overlay with backdrop, two-column stats, wrapped button groups |
+| ≤480px | Phone | Single-column layout, stacked controls, hamburger menu |
+| ≤768px | Tablet | Sidebar overlay with backdrop, two-column stats |
 | ≤1024px | Small desktop | Adjusted card grids and provider layouts |
-
-On mobile/tablet:
-- A **hamburger menu** (☰) appears in a fixed top bar, toggling the sidebar with a dark backdrop overlay.
-- Navigation links close the sidebar automatically.
-- Tables scroll horizontally and form controls stack vertically for comfortable touch interaction.
 
 ### Build the Dashboard
 
@@ -317,71 +350,61 @@ cd gui && npm install && npm run build
 
 Ports are resolved in order: **Environment variable** → **Config file** → **Default**.
 
-### GUI Port Management
-
-The web dashboard includes a full port manager at `http://localhost:3000/ports`:
-
-- **Inline editing** — click any port value to change it directly
-- **Source badges** — see whether each port comes from an env var, saved config, or default
-- **Save / Reset** — persist changes to `~/.config/nemoclaw/ports.json` or reset to defaults
-- **Auto-resolve** — one click to find free ports for any conflicts
-- **Validation** — real-time checks for range (1024–65535) and duplicates
-- **Restart reminders** — banners remind you to restart services after saving
-
-Ports locked by environment variables are shown with a 🔒 icon and cannot be edited from the GUI.
+The web dashboard includes a full port manager at `http://localhost:3000/ports` with inline editing, source badges, save/reset, auto-resolve, and validation.
 
 ### Environment Variables
 
 | Variable | Default | Service |
-|----------|---------|---------| 
+|----------|---------|---------|
 | `NEMOCLAW_GATEWAY_PORT` | 8080 | OpenShell Gateway |
 | `NEMOCLAW_DASHBOARD_PORT` | 18789 | NemoClaw Dashboard |
 | `NEMOCLAW_VLLM_PORT` | 8000 | vLLM Server |
 | `NEMOCLAW_OLLAMA_PORT` | 11434 | Ollama Server |
 | `NEMOCLAW_GUI_PORT` | 3000 | Web Dashboard |
 
-### Example: Override Ports
-
-```bash
-export NEMOCLAW_GATEWAY_PORT=9080
-export NEMOCLAW_DASHBOARD_PORT=19789
-nemoclaw onboard
-```
-
-If a configured port is in use, NemoClaw will automatically detect the conflict during preflight checks and report which process is blocking it.
-
 ---
 
 ## Key Commands
 
-### Host commands (`nemoclaw`)
+### Host Commands (`nemoclaw`)
 
-Run these on the host to set up, connect to, and manage sandboxes.
-
-| Command                              | Description                                            |
+| Command | Description |
 |--------------------------------------|--------------------------------------------------------|
-| `nemoclaw onboard`                  | Interactive setup wizard: gateway, providers, sandbox. |
-| `nemoclaw gui`                      | Launch the web dashboard in your browser.              |
-| `nemoclaw <name> connect`            | Open an interactive shell inside the sandbox.          |
-| `openshell term`                     | Launch the OpenShell TUI for monitoring and approvals. |
-| `nemoclaw start` / `stop` / `status` | Manage auxiliary services (Telegram bridge, tunnel).   |
-
-See the full [CLI reference](https://docs.nvidia.com/nemoclaw/latest/reference/commands.html) for all commands, flags, and options.
+| `nemoclaw gui` | Launch the web dashboard (primary interface). |
+| `nemoclaw onboard` | Interactive setup wizard: gateway, providers, sandbox. |
+| `nemoclaw <name> connect` | Open an interactive shell inside the sandbox. |
+| `nemoclaw <name> status` | Show sandbox status, health, and inference config. |
+| `nemoclaw <name> logs [--follow]` | View or stream sandbox logs. |
+| `nemoclaw <name> destroy` | Stop and delete the sandbox. |
+| `nemoclaw list [--json]` | List all registered sandboxes. |
+| `nemoclaw start` / `stop` / `status` | Manage auxiliary services. |
+| `openshell term` | Launch the OpenShell TUI for monitoring and approvals. |
 
 ---
 
-## Learn More
+## Origins & Acknowledgements
 
-Refer to the documentation for more information on NemoClaw.
+NemoClaw is built on top of [NVIDIA's NemoClaw](https://github.com/NVIDIA/NemoClaw), an open source reference stack originally released in March 2026. The original project provided:
 
-- [Overview](https://docs.nvidia.com/nemoclaw/latest/about/overview.html): Learn what NemoClaw does and how it fits together.
-- [How It Works](https://docs.nvidia.com/nemoclaw/latest/about/how-it-works.html): Learn about the plugin, blueprint, and sandbox lifecycle.
-- [Architecture](https://docs.nvidia.com/nemoclaw/latest/reference/architecture.html): Learn about the plugin structure, blueprint lifecycle, and sandbox environment.
-- [Inference Profiles](https://docs.nvidia.com/nemoclaw/latest/reference/inference-profiles.html): Learn about the NVIDIA Endpoint inference configuration.
-- [Network Policies](https://docs.nvidia.com/nemoclaw/latest/reference/network-policies.html): Learn about egress control and policy customization.
-- [CLI Commands](https://docs.nvidia.com/nemoclaw/latest/reference/commands.html): Learn about the full command reference.
-- [Troubleshooting](https://docs.nvidia.com/nemoclaw/latest/reference/troubleshooting.html): Troubleshoot common issues and resolution steps.
-- [Discord](https://discord.gg/XFpfPv9Uvx): Join the community for questions and discussion.
+- The `nemoclaw` CLI and blueprint system for sandbox orchestration
+- Integration with NVIDIA OpenShell for sandboxed agent execution
+- NVIDIA Nemotron model support via build.nvidia.com
+- Declarative network and filesystem policy enforcement
+
+We've extended the original into a full management platform by:
+
+- Replacing all CLI subprocess calls with native **gRPC and HTTP API** integration
+- Building a comprehensive **web dashboard** with React and Vite
+- Adding **multi-provider inference** support (OpenRouter, Gemini, Ollama, vLLM, NIM)
+- Implementing **multi-claw management** for running independent agent instances
+- Adding **agent chat** with server-side LLM proxy and conversation memory
+- Building a **denial dashboard** for AI-recommended policy approval
+- Adding **gateway lifecycle management** with Docker Engine API integration
+- Implementing a **credential vault** for persistent API key management
+- Adding **custom image building** with SSE-streamed output
+- Building a **real-time monitoring** system with WebSocket live updates
+
+The core sandbox security model — Landlock, seccomp, network namespace isolation, and policy-enforced egress — remains as NVIDIA designed it.
 
 ## License
 
