@@ -218,7 +218,7 @@ Ollama supports connecting to remote servers — set the endpoint URL in the das
 The sandbox starts with a default policy that controls network egress and filesystem access:
 
 | Layer      | What it protects                                    | When it applies             |
-|------------|-----------------------------------------------------|-----------------------------
+|------------|-----------------------------------------------------|----------------------------|
 | Network    | Blocks unauthorized outbound connections.           | Hot-reloadable at runtime.  |
 | Filesystem | Prevents reads/writes outside `/sandbox` and `/tmp`.| Locked at sandbox creation. |
 | Process    | Blocks privilege escalation and dangerous syscalls. | Locked at sandbox creation. |
@@ -307,7 +307,7 @@ nemoclaw gui --port 8888
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via **gRPC CreateSandbox + WatchSandbox** with SSE-streamed progress. Uses a `setTimeout`-based state machine for reliable event delivery. Provider and inference configuration saved locally for resilience under gateway disk pressure. |
 | **Sandbox Manager** | List, inspect, start/stop, and **destroy** sandboxes with confirmation dialog and live status badges |
-| **Agent Chat** | Web-based chat interface that executes OpenClaw commands inside sandboxes via **gRPC ExecSandbox** streaming. Returns actionable error messages with recovery links when the sandbox is unreachable (SSH transport failure), OpenClaw is not installed (exit 127), or the API key is missing/corrupted. Includes server-side **API key format validation** to prevent garbage data from being stored. |
+| **Agent Chat** | Web-based chat interface that executes OpenClaw commands inside sandboxes via **gRPC ExecSandbox** streaming. Returns actionable error messages with recovery links when the sandbox is unreachable (SSH transport failure), OpenClaw is not installed (exit 127), or the API key is missing/corrupted. Includes server-side **API key format validation** and **persistent API key restoration** — keys saved via the Inference Config page are automatically restored into `process.env` on server restart. |
 | **Log Viewer** | Real-time log streaming via **gRPC WatchSandbox** with source and level filtering |
 | **Policy Editor** | View, **apply**, and **remove** security policy presets per sandbox — with sandbox selector and live status. Includes a **YAML editor** with line numbers and **OPA rule validation** panel. |
 | **Inference Config** | Visual provider selection (NVIDIA Cloud, Ollama, OpenRouter, Google Gemini, vLLM, NIM Local) with persistent config, save/load, and test connection. Includes a **Routing Transparency** panel showing resolved inference routes, matched protocols, and credential status. |
@@ -447,7 +447,7 @@ Ports locked by environment variables are shown with a 🔒 icon and cannot be e
 ### Environment Variables
 
 | Variable | Default | Service |
-|----------|---------|---------
+|----------|---------|---------|
 | `NEMOCLAW_GATEWAY_PORT` | 8080 | OpenShell Gateway |
 | `NEMOCLAW_DASHBOARD_PORT` | 18789 | NemoClaw Dashboard |
 | `NEMOCLAW_VLLM_PORT` | 8000 | vLLM Server |
