@@ -270,7 +270,7 @@ NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP
 
 ### Dashboard Backend Components
 
-- **`lib/grpcClient.js`** — Persistent gRPC channel with mTLS credential loading, connection pooling, and typed async wrappers for all OpenShell and Inference RPCs.
+- **`lib/grpcClient.js`** — Persistent gRPC channel with mTLS credential loading, connection pooling, typed async wrappers for all OpenShell and Inference RPCs, and **provider type mapping** (`mapProviderToGrpcType`) that translates GUI provider keys (e.g., `openrouter`, `gemini`) to gateway-supported types (`openai`, `anthropic`, `nvidia`).
 - **`lib/gatewayHealth.js`** — Health monitoring via gRPC Health RPC and HTTP `/readyz` endpoint. Reads gateway config from `~/.config/openshell/active_gateway` and `gateways/<name>/metadata.json`.
 - **`services/dockerGateway.js`** — Direct Docker Engine API communication over Unix socket for container lifecycle (start/stop/inspect). Requires Docker API ≥ v1.44.
 - **`routes/claws.js`** — Claw lifecycle routes using gRPC `CreateSandbox` + `WatchSandbox` for SSE-streamed deployment progress.
