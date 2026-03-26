@@ -65,13 +65,24 @@ export function ChatInterface() {
 
         try {
             const result = await api.sendChatMessage(selectedSandbox, userMsg.content, sessionId);
-            const assistantMsg: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: result.response || 'No response received.',
-                timestamp: new Date(),
-            };
-            setMessages(prev => [...prev, assistantMsg]);
+            if (result.ok === false) {
+                // API returned a structured error — show as system warning
+                const errorMsg: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: 'system',
+                    content: `⚠ ${result.response || result.error || 'Unknown error from agent'}`,
+                    timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, errorMsg]);
+            } else {
+                const assistantMsg: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: 'assistant',
+                    content: result.response || 'No response received.',
+                    timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, assistantMsg]);
+            }
         } catch (err) {
             const errorMsg: Message = {
                 id: (Date.now() + 1).toString(),
@@ -143,6 +154,21 @@ export function ChatInterface() {
                                 </div>
                             )}
                             <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                            {msg.role === 'system' && msg.content.includes('API key') && (
+                                <a href="/inference" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
+                                    → Reconfigure Inference
+                                </a>
+                            )}
+                            {msg.role === 'system' && msg.content.includes('not installed') && (
+                                <a href="/onboard" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
+                                    → Create New Sandbox with OpenClaw
+                                </a>
+                            )}
+                            {msg.role === 'system' && msg.content.includes('SSH transport') && (
+                                <a href="/sandboxes" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
+                                    → Manage Sandboxes
+                                </a>
+                            )}
                             <div style={{
                                 fontSize: '0.65rem',
                                 color: msg.role === 'user' ? 'rgba(0,0,0,0.5)' : 'var(--nc-text-muted)',
