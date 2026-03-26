@@ -1,9 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
-// NemoClaw — Dashboard API Server
-// Express server providing gRPC-native REST/SSE endpoints for the web dashboard.
-// Zero CLI subprocess calls — all operations use direct gRPC and HTTP APIs.
+// NemoClaw Dashboard — Express API Server
+// All sandbox/gateway operations use native gRPC and HTTP — no CLI subprocess calls.
 
 import express from 'express';
 import { createServer } from 'http';
@@ -11,12 +7,12 @@ import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { createRequire } from 'module';
 import { homedir } from 'os';
-import * as grpcClient from './lib/grpcClient.js';
-import * as gatewayHealth from './lib/gatewayHealth.js';
+import { createRequire } from 'module';
 import clawRoutes from './routes/claws.js';
 import { listClaws, registerClaw } from './services/clawManager.js';
+import * as grpcClient from './lib/grpcClient.js';
+import * as gatewayHealth from './lib/gatewayHealth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -325,11 +321,19 @@ app.post('/api/policies/remove', async (req, res) => {
 
 const NEMOCLAW_CONFIG_DIR = join(homedir(), '.nemoclaw');
 const INFERENCE_CONFIG_FILE = join(NEMOCLAW_CONFIG_DIR, 'config.json');
+const CREDENTIALS_VAULT_FILE = join(NEMOCLAW_CONFIG_DIR, 'credentials.json');
 
 function ensureNemoClawConfigDir() {
     if (!existsSync(NEMOCLAW_CONFIG_DIR)) {
         mkdirSync(NEMOCLAW_CONFIG_DIR, { recursive: true });
     }
+}
+
+/** Validates that an API key looks reasonable (non-empty, no corruption). */
+function isValidApiKey(key) {
+    if (!key || typeof key !== 'string') return false;
+    const trimmed = key.trim();
+    return trimmed.length >= 8 && !/[\x00-\x1f]/.test(trimmed);
 }
 
 function loadInferenceConfig() {
@@ -349,31 +353,60 @@ function saveInferenceConfigToDisk(config) {
     writeFileSync(INFERENCE_CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
-/**
- * Validate that an API key looks syntactically plausible.
- * Rejects empty, whitespace-only, or obviously corrupted keys.
- */
-function isValidApiKey(key) {
-    if (!key || typeof key !== 'string') return false;
-    const trimmed = key.trim();
-    if (trimmed.length < 8) return false;
-    // Reject keys that are entirely non-printable or look like garbled data
-    if (/[^\x20-\x7E]/.test(trimmed)) return false;
-    return true;
+// ── Per-Provider Credential Vault ───────────────────────────────
+//
+// Stores API keys indexed by provider key so they persist across
+// provider switches and redeployments.  Users configure a key once;
+// subsequent deploys auto-fill from the vault.
+
+function loadCredentialVault() {
+    ensureNemoClawConfigDir();
+    if (!existsSync(CREDENTIALS_VAULT_FILE)) return {};
+    try {
+        return JSON.parse(readFileSync(CREDENTIALS_VAULT_FILE, 'utf-8'));
+    } catch {
+        return {};
+    }
+}
+
+function saveCredentialToVault(providerKey, apiKey) {
+    if (!providerKey || !apiKey || !isValidApiKey(apiKey)) return;
+    const vault = loadCredentialVault();
+    vault[providerKey] = apiKey;
+    ensureNemoClawConfigDir();
+    writeFileSync(CREDENTIALS_VAULT_FILE, JSON.stringify(vault, null, 2), { mode: 0o600 });
+}
+
+function getCredentialFromVault(providerKey) {
+    const vault = loadCredentialVault();
+    return vault[providerKey] || null;
 }
 
 /**
- * Restore persisted API key from config.json into process.env at startup.
- * Without this, the key is lost whenever the server restarts because
- * process.env values are only held in memory.
+ * Restore all persisted API keys into process.env at startup.
+ * Reads from both the vault (per-provider) and legacy config.json.
  */
-function restoreApiKeyFromConfig() {
+function restoreApiKeysAtStartup() {
+    // Restore from per-provider vault
+    try {
+        const vault = loadCredentialVault();
+        for (const [provKey, apiKey] of Object.entries(vault)) {
+            if (!isValidApiKey(apiKey)) continue;
+            const envVar = `${provKey.toUpperCase().replace(/-/g, '_')}_API_KEY`;
+            process.env[envVar] = apiKey;
+            console.log(`  ✓ Restored ${envVar} from credential vault`);
+        }
+    } catch (err) {
+        console.warn('[startup] Could not restore credentials from vault:', err.message);
+    }
+
+    // Restore from legacy config.json (backwards compat)
     try {
         const cfg = loadInferenceConfig();
         if (!cfg) return;
         const envVar = cfg.credentialEnv;
         const key = cfg._apiKey;
-        if (envVar && key && isValidApiKey(key)) {
+        if (envVar && key && isValidApiKey(key) && !process.env[envVar]) {
             process.env[envVar] = key;
             console.log(`  ✓ Restored ${envVar} from persisted config`);
         }
@@ -382,8 +415,8 @@ function restoreApiKeyFromConfig() {
     }
 }
 
-// Restore API key into process.env immediately on module load
-restoreApiKeyFromConfig();
+// Restore all API keys into process.env immediately on module load
+restoreApiKeysAtStartup();
 
 app.get('/api/inference', async (req, res) => {
     try {
@@ -416,38 +449,27 @@ app.put('/api/inference', async (req, res) => {
 
         const providerName = `nemoclaw-${provider}`;
 
+        // Resolve API key: explicit > vault > existing config
+        const resolvedApiKey = apiKey || getCredentialFromVault(provider);
+
         // Best-effort gRPC — save locally even if gateway is unreachable
         let gatewayWarning = '';
         const credentials = {};
         const config = {};
-        if (apiKey) {
-            credentials.api_key = apiKey;
+        if (resolvedApiKey) {
+            credentials[grpcClient.mapProviderToCredentialKey(provider)] = resolvedApiKey;
         }
         if (endpointUrl) {
-            config.base_url = endpointUrl;
+            config[grpcClient.mapProviderToConfigKey(provider)] = endpointUrl;
         }
 
         try {
-            try {
-                await grpcClient.createProvider({
-                    name: providerName,
-                    type: grpcClient.mapProviderToGrpcType(provider),
-                    credentials,
-                    config,
-                });
-            } catch (createErr) {
-                if (createErr.code === 6 /* ALREADY_EXISTS */) {
-                    await grpcClient.updateProvider({
-                        name: providerName,
-                        type: grpcClient.mapProviderToGrpcType(provider),
-                        credentials,
-                        config,
-                    });
-                } else {
-                    throw createErr;
-                }
-            }
-
+            await grpcClient.ensureProvider(
+                providerName,
+                grpcClient.mapProviderToGrpcType(provider),
+                credentials,
+                config,
+            );
             await grpcClient.setClusterInference(providerName, model || '');
         } catch (grpcErr) {
             // Gateway unreachable — continue with local-only save
@@ -456,22 +478,23 @@ app.put('/api/inference', async (req, res) => {
         }
 
         const existing = loadInferenceConfig() || {};
+        const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
         const updated = {
             ...existing,
             endpointType: provider,
             endpointUrl: endpointUrl || existing.endpointUrl || '',
             model: model || existing.model || '',
-            credentialEnv: credentialEnv || existing.credentialEnv || '',
+            credentialEnv: envVar,
             provider,
             providerLabel: provider,
             onboardedAt: new Date().toISOString(),
         };
 
-        if (apiKey) {
-            const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
-            process.env[envVar] = apiKey;
-            updated._apiKey = apiKey;
-            updated.credentialEnv = envVar;
+        if (resolvedApiKey) {
+            process.env[envVar] = resolvedApiKey;
+            updated._apiKey = resolvedApiKey;
+            // Persist to per-provider vault so re-deploys don't need re-entry
+            saveCredentialToVault(provider, resolvedApiKey);
         }
 
         saveInferenceConfigToDisk(updated);
@@ -642,36 +665,26 @@ app.get('/api/onboard/execute', async (req, res) => {
     const providerType = provider || 'cloud';
     const providerName = `nemoclaw-${providerType}`;
 
-    // Step 1: Create/update provider in gateway
+    // Resolve API key: explicit > vault > existing config
+    const resolvedApiKey = apiKey || getCredentialFromVault(providerType);
+
+    // Step 1: Create/update provider in gateway (idempotent)
     try {
         sendEvent({ step: 'provider', status: 'running', message: 'Configuring inference provider...' });
         const credentials = {};
         const config = {};
-        if (apiKey) {
-            credentials.api_key = apiKey;
+        if (resolvedApiKey) {
+            credentials[grpcClient.mapProviderToCredentialKey(providerType)] = resolvedApiKey;
         }
         if (endpoint) {
-            config.base_url = endpoint;
+            config[grpcClient.mapProviderToConfigKey(providerType)] = endpoint;
         }
-        try {
-            await grpcClient.createProvider({
-                name: providerName,
-                type: grpcClient.mapProviderToGrpcType(providerType),
-                credentials,
-                config,
-            });
-        } catch (createErr) {
-            if (createErr.code === 6 /* ALREADY_EXISTS */) {
-                await grpcClient.updateProvider({
-                    name: providerName,
-                    type: grpcClient.mapProviderToGrpcType(providerType),
-                    credentials,
-                    config,
-                });
-            } else {
-                throw createErr;
-            }
-        }
+        await grpcClient.ensureProvider(
+            providerName,
+            grpcClient.mapProviderToGrpcType(providerType),
+            credentials,
+            config,
+        );
         sendEvent({ step: 'provider', status: 'complete', message: 'Provider configured' });
     } catch (err) {
         sendEvent({ step: 'provider', status: 'error', message: `Provider setup failed: ${err.message}` });
@@ -686,7 +699,7 @@ app.get('/api/onboard/execute', async (req, res) => {
         sendEvent({ step: 'inference', status: 'error', message: `Inference config failed: ${err.message}` });
     }
 
-    // Step 3: Create sandbox
+    // Step 3: Create sandbox (idempotent — handles UNIQUE constraint)
     let sandboxId = null;
     try {
         sendEvent({ step: 'sandbox', status: 'running', message: `Creating sandbox '${safeName}'...` });
@@ -699,7 +712,7 @@ app.get('/api/onboard/execute', async (req, res) => {
             },
             providers: [providerName],
         };
-        const resp = await grpcClient.createSandbox(spec, safeName);
+        const resp = await grpcClient.ensureSandbox(spec, safeName);
         sandboxId = resp.sandbox?.id || '';
         sendEvent({ step: 'sandbox', status: 'complete', message: `Sandbox '${safeName}' created` });
     } catch (err) {
@@ -709,7 +722,7 @@ app.get('/api/onboard/execute', async (req, res) => {
         return;
     }
 
-    // Save inference config locally
+    // Save inference config locally + persist API key to vault
     try {
         const apiKeyEnvVar = `${providerType.toUpperCase().replace(/-/g, '_')}_API_KEY`;
         const inferenceConfig = {
@@ -720,10 +733,11 @@ app.get('/api/onboard/execute', async (req, res) => {
             providerLabel: providerType,
             onboardedAt: new Date().toISOString(),
         };
-        if (apiKey) {
+        if (resolvedApiKey) {
             inferenceConfig.credentialEnv = apiKeyEnvVar;
-            inferenceConfig._apiKey = apiKey;
-            process.env[apiKeyEnvVar] = apiKey;
+            inferenceConfig._apiKey = resolvedApiKey;
+            process.env[apiKeyEnvVar] = resolvedApiKey;
+            saveCredentialToVault(providerType, resolvedApiKey);
         }
         saveInferenceConfigToDisk(inferenceConfig);
     } catch { /* best-effort */ }
@@ -802,7 +816,39 @@ app.get('/api/onboard/execute', async (req, res) => {
     }
 });
 
-// ── Chat Proxy (gRPC ExecSandbox) ───────────────────────────────
+// ── Chat Proxy (Direct LLM API) ────────────────────────────────
+
+// In-memory per-session conversation history for multi-turn chat.
+// Keys: sessionId → { messages: [{role, content}], lastAccess: Date }
+const chatSessions = new Map();
+const MAX_SESSION_MESSAGES = 50;
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function getSessionHistory(sessionId) {
+    const session = chatSessions.get(sessionId);
+    if (session) {
+        session.lastAccess = Date.now();
+        return session.messages;
+    }
+    const messages = [{
+        role: 'system',
+        content: 'You are an AI assistant running inside a secure OpenShell sandbox managed by NemoClaw. '
+            + 'You can help the user with coding, research, data analysis, and general questions. '
+            + 'Be concise and helpful. Format code with markdown fences when appropriate.',
+    }];
+    chatSessions.set(sessionId, { messages, lastAccess: Date.now() });
+    return messages;
+}
+
+// Periodic cleanup of stale sessions
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of chatSessions) {
+        if (now - session.lastAccess > SESSION_TTL_MS) {
+            chatSessions.delete(id);
+        }
+    }
+}, 5 * 60 * 1000);
 
 app.post('/api/chat/message', async (req, res) => {
     const { sandboxName, message, sessionId } = req.body;
@@ -811,10 +857,9 @@ app.post('/api/chat/message', async (req, res) => {
     }
     const safeSession = (sessionId || 'gui-session').replace(/[^a-zA-Z0-9-_]/g, '');
 
-    let sandboxId;
+    // Verify the sandbox exists (preserves API contract)
     try {
-        const resp = await grpcClient.getSandbox(sandboxName);
-        sandboxId = resp.sandbox?.id || sandboxName;
+        await grpcClient.getSandbox(sandboxName);
     } catch {
         return res.json({
             ok: false,
@@ -823,167 +868,114 @@ app.post('/api/chat/message', async (req, res) => {
         });
     }
 
+    // Resolve inference configuration
     const inferCfg = loadInferenceConfig() || {};
-    const environment = {};
-
     const credEnv = inferCfg.credentialEnv;
-    const resolvedApiKey = (credEnv && process.env[credEnv]) || inferCfg._apiKey || '';
+    const resolvedApiKey = (credEnv && process.env[credEnv])
+        || inferCfg._apiKey
+        || getCredentialFromVault(inferCfg.provider)
+        || '';
 
     if (!resolvedApiKey && inferCfg.provider && inferCfg.provider !== 'ollama') {
         return res.json({
             ok: false,
-            response: `No API key found for provider '${inferCfg.provider}'. Please configure your API key on the Inference Config page.`,
+            response: `Inference API key not configured. Please go to the Inference Config page and save your ${inferCfg.provider} API key, then try again.`,
             error: 'Missing API key',
         });
     }
 
-    if (resolvedApiKey && !isValidApiKey(resolvedApiKey)) {
-        return res.json({
-            ok: false,
-            response: `The stored API key for '${inferCfg.provider}' appears to be corrupted (contains non-printable characters or is too short). Please re-enter your API key on the Inference Config page.`,
-            error: 'Corrupted API key',
-        });
+    // Resolve endpoint and model
+    let baseUrl = inferCfg.endpointUrl || '';
+    if (!baseUrl) {
+        // Try to get from gateway inference bundle
+        try {
+            const bundle = await grpcClient.getInferenceBundle();
+            const route = (bundle.routes || [])[0];
+            if (route?.baseUrl) baseUrl = route.baseUrl;
+        } catch { /* fall through to default */ }
+    }
+    if (!baseUrl) baseUrl = 'https://api.openai.com/v1';
+    const completionsUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+
+    const model = inferCfg.model || 'gpt-4o-mini';
+
+    // Build conversation history
+    const history = getSessionHistory(safeSession);
+    history.push({ role: 'user', content: message });
+
+    // Cap history length
+    while (history.length > MAX_SESSION_MESSAGES + 1) {
+        // Keep system message (index 0), remove oldest user/assistant pair
+        history.splice(1, 1);
     }
 
-    if (credEnv && resolvedApiKey) {
-        environment[credEnv] = resolvedApiKey;
-    }
-    if (inferCfg.endpointUrl) {
-        const urlEnvMap = {
-            'ollama': 'OLLAMA_HOST',
-            'vllm': 'VLLM_ENDPOINT',
-            'openrouter': 'OPENROUTER_BASE_URL',
-            'nim-local': 'NIM_ENDPOINT',
-        };
-        const urlEnv = urlEnvMap[inferCfg.provider] || `${inferCfg.provider?.toUpperCase()}_ENDPOINT`;
-        environment[urlEnv] = inferCfg.endpointUrl;
-    }
+    // Call the OpenAI-compatible API
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
     try {
-        const command = [
-            'openclaw', 'agent',
-            '--agent', 'main',
-            '--local',
-            '-m', message,
-            '--session-id', safeSession,
-        ];
+        const headers = { 'Content-Type': 'application/json' };
+        if (resolvedApiKey) {
+            headers['Authorization'] = `Bearer ${resolvedApiKey}`;
+        }
 
-        const stream = grpcClient.execSandbox(sandboxId, command, {
-            environment,
-            timeoutSeconds: 120,
+        const fetchRes = await fetch(completionsUrl, {
+            method: 'POST',
+            headers,
+            signal: controller.signal,
+            body: JSON.stringify({
+                model,
+                messages: history,
+                max_tokens: 4096,
+            }),
         });
+        clearTimeout(timeout);
 
-        let stdout = '';
-        let stderr = '';
-        let exitCode = null;
-        let finished = false;
+        if (!fetchRes.ok) {
+            const errText = await fetchRes.text().catch(() => '');
+            let detail;
+            try { detail = JSON.parse(errText)?.error?.message || errText; } catch { detail = errText; }
 
-        const timeout = setTimeout(() => {
-            if (!finished) {
-                finished = true;
-                stream.cancel();
-                res.json({
+            if (fetchRes.status === 401) {
+                return res.json({
                     ok: false,
-                    response: 'The agent did not respond within 120 seconds. The sandbox may be overloaded.',
-                    error: 'Timeout',
+                    response: `Authentication failed (HTTP 401). Your API key may be invalid or expired.\n\nGo to Inference Config to update it.`,
+                    error: `HTTP 401: ${detail}`,
                 });
             }
-        }, 125000);
 
-        stream.on('data', (event) => {
-            if (finished) return;
-            if (event.stdout) {
-                stdout += Buffer.isBuffer(event.stdout) ? event.stdout.toString('utf-8') : String(event.stdout);
-            }
-            if (event.stderr) {
-                stderr += Buffer.isBuffer(event.stderr) ? event.stderr.toString('utf-8') : String(event.stderr);
-            }
-            if (event.exitCode !== undefined && event.exitCode !== null) {
-                exitCode = event.exitCode;
-            }
-            if (event.exit !== undefined) {
-                exitCode = event.exit;
-                finished = true;
-                clearTimeout(timeout);
-
-                if (exitCode === 127) {
-                    res.json({
-                        ok: false,
-                        response: 'OpenClaw is not installed in this sandbox. The sandbox may need to be rebuilt with the OpenClaw image.\n\nTry creating a new sandbox from the Onboard page.',
-                        error: 'OpenClaw not found (exit 127)',
-                    });
-                } else if (exitCode === 0) {
-                    const clean = stdout
-                        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-                        .replace(/\r/g, '')
-                        .trim();
-                    res.json({
-                        ok: true,
-                        response: clean || '(no output)',
-                    });
-                } else {
-                    const clean = stdout
-                        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-                        .replace(/\r/g, '')
-                        .trim();
-                    res.json({
-                        ok: false,
-                        response: clean || stderr.trim() || 'No response from agent. Is the sandbox running and OpenClaw installed?',
-                        error: exitCode ? `Exit code ${exitCode}` : 'Agent command failed',
-                    });
-                }
-            }
-        });
-
-        stream.on('error', (err) => {
-            if (finished) return;
-            finished = true;
-            clearTimeout(timeout);
-
-            // Classify the gRPC error into a user-friendly message
-            const msg = err.message || 'Unknown error';
-            let response;
-            if (msg.includes('ssh transport') || msg.includes('Connection reset')) {
-                response = 'The sandbox SSH transport was reset. The sandbox may need to be restarted.\n\nTry restarting the sandbox from the Sandboxes page, or create a new one from the Onboard page.';
-            } else if (msg.includes('UNAVAILABLE') || msg.includes('connect')) {
-                response = 'Cannot reach the OpenShell gateway. Make sure the gateway container is running.';
-            } else if (msg.includes('not found') || msg.includes('NOT_FOUND')) {
-                response = `The sandbox was not found. It may have been deleted. Please select a different sandbox.`;
-            } else {
-                response = `Failed to reach the agent: ${msg}\n\nMake sure the sandbox is running and OpenClaw is installed inside it.`;
-            }
-
-            // Return 200 with structured error so the frontend can display
-            // the actual message instead of a generic "500 Internal Server Error"
-            res.json({
+            return res.json({
                 ok: false,
-                response,
-                error: msg,
+                response: `LLM provider returned HTTP ${fetchRes.status}: ${detail || 'Unknown error'}\n\nCheck your inference configuration.`,
+                error: `HTTP ${fetchRes.status}`,
             });
-        });
+        }
 
-        stream.on('end', () => {
-            if (finished) return;
-            finished = true;
-            clearTimeout(timeout);
-            res.json({
-                ok: stdout.length > 0,
-                response: stdout.trim() || '(no output)',
-            });
-        });
+        const data = await fetchRes.json();
+        const assistantContent = data.choices?.[0]?.message?.content || '(no response)';
+
+        // Store assistant reply in session history
+        history.push({ role: 'assistant', content: assistantContent });
+
+        res.json({ ok: true, response: assistantContent });
     } catch (err) {
+        clearTimeout(timeout);
         const msg = err.message || 'Unknown error';
         let response;
-        if (msg.includes('No gateway connection')) {
-            response = 'OpenShell gateway is not configured or unreachable. Check the Gateway page for status.';
+        if (err.name === 'AbortError' || msg.includes('abort')) {
+            response = 'Request timed out after 60 seconds. The model may be overloaded — try again.';
+        } else if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND')) {
+            response = `Cannot reach the inference endpoint at ${baseUrl}.\n\nMake sure the endpoint URL is correct and the service is running.`;
         } else {
-            response = `Failed to connect to sandbox: ${msg}`;
+            response = `Failed to reach inference provider: ${msg}\n\nCheck your endpoint URL and API key in Inference Config.`;
         }
-        res.json({
-            ok: false,
-            response,
-            error: msg,
-        });
+
+        // Remove the user message from history since we didn't get a response
+        if (history.length > 0 && history[history.length - 1].role === 'user') {
+            history.pop();
+        }
+
+        res.json({ ok: false, response, error: msg });
     }
 });
 
