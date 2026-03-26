@@ -73,11 +73,11 @@ describe('ChatInterface', () => {
         });
     });
 
-    it('shows create sandbox link for missing OpenClaw', async () => {
+    it('shows error for provider issues', async () => {
         vi.mocked(api.sendChatMessage).mockResolvedValue({
             ok: false,
-            response: 'OpenClaw is not installed in this sandbox.',
-            error: 'openclaw not found',
+            response: 'LLM provider returned HTTP 401: Invalid API key',
+            error: 'HTTP 401',
         });
         render(<ChatInterface />);
         await waitFor(() => {
