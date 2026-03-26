@@ -17,7 +17,7 @@ export function ChatInterface() {
         {
             id: '1',
             role: 'assistant',
-            content: 'Welcome to the OpenClaw Agent Chat! Select a sandbox above and start chatting.\n\nYou can ask me to:\n- Browse the web and research topics\n- Write, edit, and run code\n- Manage files and data\n- Interact with APIs and services\n\nAll actions are constrained by the sandbox security policy.',
+            content: 'Welcome to the OpenClaw Agent Chat! Select a claw above to start chatting.\n\nYour messages are routed through the selected sandbox via ExecSandbox — all agent actions are constrained by the sandbox\'s security policy.\n\nYou can ask me to:\n- Browse the web and research topics\n- Write, edit, and run code\n- Manage files and data\n- Interact with APIs and services\n\nAll actions are enforced by the claw\'s Landlock, network, and filesystem policies.',
             timestamp: new Date(),
         },
     ]);
