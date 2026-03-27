@@ -102,7 +102,7 @@ nemoclaw uninstall
 
 ## Architecture
 
-NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP** — the dashboard backend contains **zero CLI subprocess calls**. All sandbox lifecycle, inference routing, provider management, policy updates, log streaming, and agent execution use the same protobuf APIs that the gateway exposes.
+NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP** — the dashboard backend contains **zero CLI subprocess calls**. All sandbox lifecycle, inference routing, provider management, policy updates, log streaming, and agent execution use the same protobuf APIs that the gateway expose.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -236,7 +236,7 @@ NemoClaw includes a built-in **Extensions Catalog** for installing integrations 
    - Apply the network policy preset (allowing sandbox egress to the service's API)
    - Prompt for credentials if required (optional — can be skipped)
    - Write the bot token to `/sandbox/.openclaw-data/.channel-env` inside the sandbox via `ExecSandbox` — this persists across agent sessions and container restarts
-   - Run `openclaw doctor --fix` to hot-apply the channel config to the running gateway without a restart
+   - Restart the `openclaw gateway` daemon inside the sandbox so the new environment variables and channel configurations take effect immediately
    - Attempt to install packages via `ExecSandbox` — failures are reported as **advisory warnings** only; the extension is still considered installed if policy and credential steps succeed
 5. To remove an extension, click **Uninstall** — the network policy is removed.
 
@@ -252,7 +252,7 @@ curl -X POST http://localhost:3000/api/extensions/sync-channel \
   -d '{"extensionId":"discord","sandboxName":"<your-claw-name>"}'
 ```
 
-This re-injects the stored bot token and runs `openclaw doctor --fix` inside the sandbox to hot-apply the channel config to the running gateway.
+This re-injects the stored bot token and restarts the gateway inside the sandbox so the new channel config takes effect.
 
 ### Adding Custom Extensions
 
@@ -293,7 +293,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
 | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
-| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) are loaded and injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
+| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) and extension capabilities are injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
 | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with OPA rule validation. |
 | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to credential vault. |
@@ -391,7 +391,7 @@ NemoClaw supports running **multiple independent claw instances** under a single
 | `GET` | `/api/extensions/:id` | Get a specific extension |
 | `POST` | `/api/extensions/install` | Install an extension on a sandbox |
 | `POST` | `/api/extensions/uninstall` | Remove an extension from a sandbox |
-| `POST` | `/api/extensions/sync-channel` | Re-inject a stored bot token into the sandbox and run `openclaw doctor --fix`. Body: `{extensionId, sandboxName}`. Use to backfill or reconnect a channel. |
+| `POST` | `/api/extensions/sync-channel` | Re-inject a stored bot token into the sandbox environment via gRPC `UpdateConfig`. Body: `{extensionId, sandboxName}`. Useful for backfilling or reconnecting the channel after the sandbox was created. |
 
 #### Inference Routing
 
@@ -515,7 +515,7 @@ We've extended the original into a full management platform by:
 - Implementing a **credential vault** for persistent API key management
 - Adding **custom image building** with SSE-streamed output
 - Building a **real-time monitoring** system with WebSocket live updates
-- Implementing an **extensions catalog** for installing integrations (Discord, Telegram, Slack, etc.) with network policies, credentials, persistent env file injection, and `openclaw doctor --fix` activation
+- Implementing an **extensions catalog** for installing integrations (Discord, Telegram, Slack, etc.) with network policies, credentials, and in-sandbox packages
 - Implementing a **bidirectional WebSocket proxy** tunnelling the React frontend to the OpenClaw gateway daemon via gRPC `ExecSandbox` stdin/stdout for real-time agent tool-use approvals
 - Building **feature parity** with the upstream NemoClaw reference implementation: exec approvals, skills viewer, plugin manager, memory search, and cron scheduler — all backed by the sandboxed OpenClaw gateway API
 
