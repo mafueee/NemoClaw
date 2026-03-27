@@ -55,9 +55,18 @@ RUN mkdir -p /sandbox/.openclaw-data/agents/main/agent \
     && ln -s /sandbox/.openclaw-data/update-check.json /sandbox/.openclaw/update-check.json \
     && chown -R sandbox:sandbox /sandbox/.openclaw /sandbox/.openclaw-data
 
-# Install OpenClaw CLI and PyYAML for blueprint runner (single layer)
+# Install OpenClaw CLI and Python dependencies (single layer)
+# - pyyaml: blueprint runner
+# - discord.py, python-telegram-bot, slack-sdk, huggingface-hub: pre-installed
+#   extension libraries so they're available inside the sandbox without needing
+#   pip to reach PyPI through the sandbox proxy.
 RUN npm install -g openclaw@2026.3.11 \
-    && pip3 install --no-cache-dir --break-system-packages "pyyaml==6.0.3"
+    && pip3 install --no-cache-dir --break-system-packages \
+        "pyyaml==6.0.3" \
+        "discord.py>=2.3,<3" \
+        "python-telegram-bot>=21,<22" \
+        "slack-sdk>=3.27,<4" \
+        "huggingface-hub>=0.23,<1"
 
 # Copy built plugin and blueprint into the sandbox
 COPY --from=builder /opt/nemoclaw/dist/ /opt/nemoclaw/dist/
