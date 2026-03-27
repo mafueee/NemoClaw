@@ -284,12 +284,13 @@ router.post('/api/extensions/install', async (req, res) => {
     // environment variables, allowing the openclaw SDK to pick them up automatically.
     //
     // Setting key format: CHANNEL_<NAME>_TOKEN  (e.g. CHANNEL_DISCORD_TOKEN)
+    // settingValue is a SettingValue proto oneof message: { stringValue: '...' }
     if (ext.channelName && credential) {
         const settingKey = `CHANNEL_${ext.channelName.toUpperCase()}_TOKEN`;
         try {
             await grpcClient.updateConfig(sandboxName, {
                 settingKey,
-                settingValue: credential,
+                settingValue: { stringValue: credential },
             });
             steps.push({
                 step: 'channel',
@@ -452,18 +453,14 @@ router.post('/api/extensions/uninstall', async (req, res) => {
         const currentPolicyYaml = policies.parseCurrentPolicy(rawPolicy);
 
         if (currentPolicyYaml) {
-            // Remove the preset's network_policies entries from the YAML
-            // The preset entries are keyed under a top-level name matching the preset
             const presetContent = policies.loadPreset(ext.policyPreset);
             const presetEntries = presetContent ? policies.extractPresetEntries(presetContent) : null;
 
             let cleanedPolicy = currentPolicyYaml;
             if (presetEntries) {
-                // Strip the preset's entries from the current policy
                 cleanedPolicy = currentPolicyYaml.replace(presetEntries, '').replace(/\n{3,}/g, '\n\n').trim();
             }
 
-            // Write cleaned policy to temp file and apply
             const { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } = await import('fs');
             const { tmpdir } = await import('os');
 
@@ -483,7 +480,6 @@ router.post('/api/extensions/uninstall', async (req, res) => {
             }
         }
 
-        // Clean up credential from environment and state file
         if (ext.credentialKey && process.env[ext.credentialKey]) {
             delete process.env[ext.credentialKey];
         }
