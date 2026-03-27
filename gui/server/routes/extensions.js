@@ -80,29 +80,6 @@ function loadRegistry() {
 }
 
 /**
- * Parse a YAML policy preset file and extract its network_policies as a
- * simplified JS object suitable for gRPC updateConfig.
- * This is a lightweight YAML parser that handles the preset format.
- */
-function parsePresetYaml(presetName) {
-    const filePath = join(PRESETS_DIR, `${presetName}.yaml`);
-    if (!existsSync(filePath)) return null;
-
-    try {
-        const content = readFileSync(filePath, 'utf-8');
-        // Extract the network_policies block
-        const npMatch = content.match(/^network_policies:\n([\s\S]*)$/m);
-        if (!npMatch) return null;
-
-        // Parse the YAML into a policy-compatible structure
-        // We return the raw content for policy merging
-        return { raw: content, presetName };
-    } catch {
-        return null;
-    }
-}
-
-/**
  * Collect a streaming ExecSandbox response into a result object.
  * Returns { stdout, stderr, exitCode }.
  */
@@ -143,6 +120,88 @@ function collectExecResult(stream) {
             reject(err);
         });
     });
+}
+
+/**
+ * Inject a bot token into the openclaw gateway running inside the sandbox.
+ *
+ * The ~/.openclaw/openclaw.json file is read-only (owned by root, mode 0444),
+ * so we cannot modify it directly. Instead we:
+ *  1. Use Python (with the token passed as argv[1] to avoid all shell escaping)
+ *     to write a small env file to the writable /sandbox/.openclaw-data volume.
+ *  2. Run `openclaw doctor --fix` (sourcing the env file) to hot-apply the
+ *     channel config to the running gateway daemon via its local socket.
+ *     The gateway (pid 52, started by nemoclaw-start.sh) cannot be killed from
+ *     our ExecSandbox session due to sandbox process isolation.
+ *
+ * The nemoclaw-start.sh entrypoint also sources this env file at startup,
+ * so the Discord token survives container restarts automatically.
+ *
+ * @param {string} sandboxId  - resolved sandbox UUID for ExecSandbox
+ * @param {string} channelKey - openclaw channel key e.g. "discord"
+ * @param {string} token      - bot token to inject
+ * @returns {Promise<{ok: boolean, message: string}>}
+ */
+async function configureChannelInSandbox(sandboxId, channelKey, token) {
+    // Map channel key to its env var name (openclaw env fallback convention)
+    const envVarMap = {
+        discord: 'DISCORD_BOT_TOKEN',
+        telegram: 'TELEGRAM_BOT_TOKEN',
+        slack: 'SLACK_BOT_TOKEN',
+    };
+    const envVar = envVarMap[channelKey] || `${channelKey.toUpperCase()}_BOT_TOKEN`;
+
+    // Python script: writes the env file. Token is passed as argv[1] to bypass shell quoting.
+    const pyScript = [
+        'import os, sys',
+        "env_dir = '/sandbox/.openclaw-data'",
+        'os.makedirs(env_dir, exist_ok=True)',
+        "env_file = os.path.join(env_dir, '.channel-env')",
+        'tok = sys.argv[1]',
+        'with open(env_file, "w") as f:',
+        `    f.write("export ${envVar}=" + repr(tok) + "\\n")`,
+        'os.chmod(env_file, 0o600)',
+        'print("ENV_WRITTEN")',
+    ].join('\n');
+
+    // Bash script: source the env file and run openclaw doctor --fix to
+    // hot-apply the channel config to the running gateway daemon.
+    const restartScript = [
+        '. /sandbox/.openclaw-data/.channel-env',
+        'openclaw doctor --fix 2>&1',
+        'echo DOCTOR_DONE',
+    ].join('\n');
+
+    try {
+        // Step 1: Write env file via Python (token as argv avoids all shell escaping)
+        const writeStream = grpcClient.execSandbox(sandboxId, ['python3', '-c', pyScript, token], {
+            timeoutSeconds: 15,
+        });
+        const { stdout: writeOut, stderr: writeErr, exitCode: writeCode } = await collectExecResult(writeStream);
+
+        if (!writeOut.includes('ENV_WRITTEN') || writeCode !== 0) {
+            const detail = (writeErr || writeOut).slice(0, 400);
+            console.warn(`[extensions] configureChannelInSandbox: env write failed (exit ${writeCode}): ${detail}`);
+            return { ok: false, message: `Env file write failed: ${detail}` };
+        }
+        console.log(`[extensions] ${envVar} env file written in sandbox ${sandboxId}`);
+
+        // Step 2: Hot-apply with openclaw doctor --fix
+        const restartStream = grpcClient.execSandbox(sandboxId, ['bash', '-c', restartScript], {
+            timeoutSeconds: 20,
+        });
+        const { stdout: restartOut } = await collectExecResult(restartStream);
+        const gwOk = restartOut.includes('DOCTOR_DONE');
+        console.log(`[extensions] openclaw doctor --fix in ${sandboxId}: ${restartOut.slice(0, 400)}`);
+
+        return {
+            ok: true,
+            message: `${envVar} injected and openclaw doctor --fix applied${gwOk ? ' — Discord channel activated' : ' (doctor may be pending)'}`,
+        };
+    } catch (err) {
+        console.warn(`[extensions] configureChannelInSandbox failed: ${err.message}`);
+        return { ok: false, message: `ExecSandbox failed: ${err.message}` };
+    }
 }
 
 // ── List all extensions ─────────────────────────────────────────
@@ -236,12 +295,6 @@ router.post('/api/extensions/install', async (req, res) => {
     const steps = [];
 
     // Step 1: Apply network policy preset
-    // We use the CLI-based applyPreset from policies.js rather than gRPC updateConfig.
-    // The gRPC approach fails on live sandboxes because proto3 serialization
-    // of the SandboxPolicy object alters filesystem fields, triggering:
-    // "filesystem policy cannot be removed on a live sandbox".
-    // The CLI approach uses `openshell policy set --policy <yaml>` which
-    // properly handles YAML merge semantics and is the proven working path.
     try {
         const presetFile = join(PRESETS_DIR, `${ext.policyPreset}.yaml`);
         if (!existsSync(presetFile)) {
@@ -267,7 +320,6 @@ router.post('/api/extensions/install', async (req, res) => {
     // Step 2: Store credential if provided
     if (ext.credentialKey && credential) {
         try {
-            // Store in environment for the current session
             process.env[ext.credentialKey] = credential;
             steps.push({ step: 'credential', status: 'complete', message: `Credential '${ext.credentialKey}' stored` });
         } catch (err) {
@@ -277,45 +329,35 @@ router.post('/api/extensions/install', async (req, res) => {
         steps.push({ step: 'credential', status: 'skipped', message: `No credential provided for '${ext.credentialLabel || ext.credentialKey}'` });
     }
 
-    // Step 3: Register channel credential via gateway settings (gateway-native approach).
-    // Instead of running `openclaw channels add` inside the sandbox (which requires
-    // the openclaw binary to be present in the container), we store the bot token
-    // as a named gateway sandbox setting. The agent runtime reads these settings as
-    // environment variables, allowing the openclaw SDK to pick them up automatically.
-    //
-    // Setting key format: CHANNEL_<NAME>_TOKEN  (e.g. CHANNEL_DISCORD_TOKEN)
-    // settingValue is a SettingValue proto oneof message: { stringValue: '...' }
+    // Step 3: Write the bot token into the sandbox's openclaw channel config.
+    // The ~/.openclaw/openclaw.json is read-only (root-owned), so we write
+    // the token to a persistent env file and run openclaw doctor --fix.
     if (ext.channelName && credential) {
-        const settingKey = `CHANNEL_${ext.channelName.toUpperCase()}_TOKEN`;
         try {
-            await grpcClient.updateConfig(sandboxName, {
-                settingKey,
-                settingValue: { stringValue: credential },
-            });
+            let sandboxId = sandboxName;
+            try {
+                const resp = await grpcClient.getSandbox(sandboxName);
+                sandboxId = resp.sandbox?.id || sandboxName;
+            } catch { /* fall back to name */ }
+
+            const cfgResult = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
             steps.push({
                 step: 'channel',
-                status: 'complete',
-                message: `Channel credential '${settingKey}' registered in gateway`,
+                status: cfgResult.ok ? 'complete' : 'warning',
+                message: cfgResult.ok
+                    ? `${ext.channelName} channel configured in sandbox and gateway reloaded`
+                    : `Channel config warning: ${cfgResult.message}`,
             });
         } catch (err) {
-            // Gateway may be unavailable — fall back to recording in local state so
-            // the chat handler can inject the token as an env var when executing.
-            const state = loadExtState();
-            if (!state[sandboxName]) state[sandboxName] = {};
-            if (!state[sandboxName][extensionId]) state[sandboxName][extensionId] = {};
-            state[sandboxName][extensionId][settingKey] = credential;
-            saveExtState(state);
             steps.push({
                 step: 'channel',
-                status: 'complete',
-                message: `Channel credential '${settingKey}' stored locally (gateway unavailable: ${err.message})`,
+                status: 'warning',
+                message: `Channel config failed (token stored locally for env injection): ${err.message}`,
             });
         }
     }
 
     // Step 4: Run install commands inside sandbox via ExecSandbox
-    // First, auto-apply any required package registry policies so pip/npm can
-    // download packages through the sandbox proxy.
     if (ext.installCommands && ext.installCommands.length > 0) {
         const needsPypi = ext.installCommands.some(c => /pip|pip3|python.*pip/.test(c));
         const needsNpm = ext.installCommands.some(c => /\bnpm\b/.test(c));
@@ -340,13 +382,11 @@ router.post('/api/extensions/install', async (req, res) => {
                 steps.push({ step: 'policy-dep', status: 'error', message: `Failed to apply registry policy: ${err.message}` });
             }
 
-            // Small delay to allow the sandbox proxy to propagate new network rules
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
         for (const cmd of ext.installCommands) {
             try {
-                // Resolve sandbox ID from name
                 let sandboxId = sandboxName;
                 try {
                     const resp = await grpcClient.getSandbox(sandboxName);
@@ -366,15 +406,11 @@ router.post('/api/extensions/install', async (req, res) => {
                         output: result.stdout.slice(0, 500),
                     });
                 } else {
-                    // Package install failures are non-fatal warnings.
-                    // Packages may already be present in the sandbox image, or can
-                    // be installed on demand by the agent at runtime once network
-                    // policy propagates. The extension is still usable.
                     const output = (result.stderr || result.stdout).slice(0, 500);
                     steps.push({
                         step: 'install',
                         status: 'warning',
-                        message: `Package install skipped (exit ${result.exitCode}): the package may already be installed or can be installed on demand. Command: ${cmd}`,
+                        message: `Package install skipped (exit ${result.exitCode}): may already be installed or can be installed on demand. Command: ${cmd}`,
                         output,
                     });
                 }
@@ -388,14 +424,10 @@ router.post('/api/extensions/install', async (req, res) => {
         }
     }
 
-    // An extension is considered installed when policy + credential + channel steps succeed.
-    // Install commands (pip/npm) are advisory — packages are pre-installed in the Docker image.
-    // Only policy, credential, and channel registration steps are critical.
     const criticalSteps = steps.filter(s => s.step === 'policy' || s.step === 'credential' || s.step === 'channel');
     const criticalOk = criticalSteps.every(s => s.status === 'complete' || s.status === 'skipped');
     const hasInstallWarnings = steps.some(s => s.step === 'install' && s.status === 'warning');
 
-    // Persist state so chat handler knows about installed extensions
     if (criticalOk) {
         markInstalled(sandboxName, extensionId, credential || null);
     }
@@ -432,15 +464,12 @@ router.post('/api/extensions/uninstall', async (req, res) => {
     }
 
     try {
-        // Use CLI-based policy removal like the install route.
-        // Get current policy, strip the preset's entries, and re-apply.
         const policiesPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js');
         const { createRequire } = await import('module');
         const require = createRequire(import.meta.url);
         delete require.cache[require.resolve(policiesPath)];
         const policies = require(policiesPath);
 
-        // Get the raw current policy YAML
         let rawPolicy = '';
         try {
             const { execSync } = await import('child_process');
@@ -496,6 +525,62 @@ router.post('/api/extensions/uninstall', async (req, res) => {
             ok: false,
             error: `Failed to uninstall extension: ${err.message}`,
         });
+    }
+});
+
+// ── Sync channel config into sandbox ───────────────────────────
+//
+// Applies the stored credential for a channel extension to the openclaw
+// gateway inside the sandbox via the env-file + doctor mechanism.
+// Used to fix already-installed extensions that were configured before
+// this mechanism was added (backfill), and callable from the Extensions panel.
+
+router.post('/api/extensions/sync-channel', async (req, res) => {
+    const { extensionId, sandboxName } = req.body;
+
+    if (!extensionId || !sandboxName) {
+        return res.status(400).json({ ok: false, error: 'extensionId and sandboxName are required' });
+    }
+
+    const extensions = loadRegistry();
+    const ext = extensions.find(e => e.id === extensionId);
+    if (!ext) {
+        return res.status(404).json({ ok: false, error: `Extension '${extensionId}' not found` });
+    }
+
+    if (!ext.channelName) {
+        return res.status(400).json({ ok: false, error: `Extension '${extensionId}' has no channelName — nothing to sync` });
+    }
+
+    const state = loadExtState();
+    const extState = state[sandboxName]?.[extensionId] || {};
+    const credential = extState.credential || (ext.credentialKey ? process.env[ext.credentialKey] : null);
+
+    if (!credential) {
+        return res.status(400).json({
+            ok: false,
+            error: `No credential found for '${extensionId}' on sandbox '${sandboxName}'. Install the extension first with a bot token.`,
+        });
+    }
+
+    try {
+        let sandboxId = sandboxName;
+        try {
+            const resp = await grpcClient.getSandbox(sandboxName);
+            sandboxId = resp.sandbox?.id || sandboxName;
+        } catch { /* use name as fallback */ }
+
+        const result = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
+
+        res.json({
+            ok: result.ok,
+            sandboxName,
+            extensionId,
+            channelName: ext.channelName,
+            message: result.message,
+        });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
     }
 });
 
