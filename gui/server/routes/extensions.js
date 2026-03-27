@@ -196,47 +196,29 @@ router.post('/api/extensions/install', async (req, res) => {
     const steps = [];
 
     // Step 1: Apply network policy preset
+    // We use the CLI-based applyPreset from policies.js rather than gRPC updateConfig.
+    // The gRPC approach fails on live sandboxes because proto3 serialization
+    // of the SandboxPolicy object alters filesystem fields, triggering:
+    // "filesystem policy cannot be removed on a live sandbox".
+    // The CLI approach uses `openshell policy set --policy <yaml>` which
+    // properly handles YAML merge semantics and is the proven working path.
     try {
         const presetFile = join(PRESETS_DIR, `${ext.policyPreset}.yaml`);
         if (!existsSync(presetFile)) {
             steps.push({ step: 'policy', status: 'error', message: `Policy preset '${ext.policyPreset}' not found on disk` });
         } else {
-            // Load the preset content and parse network_policies
-            const content = readFileSync(presetFile, 'utf-8');
-
-            // Get current sandbox config
-            let currentPolicy = {};
-            try {
-                const config = await grpcClient.getSandboxConfig(sandboxName);
-                currentPolicy = config.policy || {};
-            } catch { /* start fresh */ }
-
-            // Parse endpoints from the YAML preset for the gRPC update
-            // We use the policies.js approach — programmatic policy merge
             const policiesPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js');
-            let presetPolicy = null;
-            try {
-                const { createRequire } = await import('module');
-                const require = createRequire(import.meta.url);
-                delete require.cache[require.resolve(policiesPath)];
-                const policies = require(policiesPath);
-                if (typeof policies.loadPresetPolicy === 'function') {
-                    presetPolicy = policies.loadPresetPolicy(ext.policyPreset);
-                }
-            } catch { /* fallback below */ }
+            const { createRequire } = await import('module');
+            const require = createRequire(import.meta.url);
+            delete require.cache[require.resolve(policiesPath)];
+            const policies = require(policiesPath);
 
-            // Merge network policies
-            const mergedPolicy = {
-                ...currentPolicy,
-                networkPolicies: {
-                    ...(currentPolicy.networkPolicies || {}),
-                    // If policies.js parsing worked, use it; otherwise use preset name as key
-                    ...(presetPolicy?.network_policies || { [ext.policyPreset]: { name: ext.policyPreset } }),
-                },
-            };
-
-            await grpcClient.updateConfig(sandboxName, { policy: mergedPolicy });
-            steps.push({ step: 'policy', status: 'complete', message: `Network policy '${ext.policyPreset}' applied` });
+            const applied = policies.applyPreset(sandboxName, ext.policyPreset);
+            if (applied) {
+                steps.push({ step: 'policy', status: 'complete', message: `Network policy '${ext.policyPreset}' applied` });
+            } else {
+                steps.push({ step: 'policy', status: 'error', message: `Failed to apply policy preset '${ext.policyPreset}'` });
+            }
         }
     } catch (err) {
         steps.push({ step: 'policy', status: 'error', message: `Policy application failed: ${err.message}` });
@@ -256,7 +238,36 @@ router.post('/api/extensions/install', async (req, res) => {
     }
 
     // Step 3: Run install commands inside sandbox via ExecSandbox
+    // First, auto-apply any required package registry policies so pip/npm can
+    // download packages through the sandbox proxy.
     if (ext.installCommands && ext.installCommands.length > 0) {
+        const needsPypi = ext.installCommands.some(c => /pip|pip3|python.*pip/.test(c));
+        const needsNpm = ext.installCommands.some(c => /\bnpm\b/.test(c));
+
+        if (needsPypi || needsNpm) {
+            try {
+                const policiesPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js');
+                const { createRequire } = await import('module');
+                const require = createRequire(import.meta.url);
+                delete require.cache[require.resolve(policiesPath)];
+                const policies = require(policiesPath);
+
+                if (needsPypi) {
+                    policies.applyPreset(sandboxName, 'pypi');
+                    steps.push({ step: 'policy-dep', status: 'complete', message: 'Applied PyPI registry policy for package installation' });
+                }
+                if (needsNpm) {
+                    policies.applyPreset(sandboxName, 'npm');
+                    steps.push({ step: 'policy-dep', status: 'complete', message: 'Applied npm registry policy for package installation' });
+                }
+            } catch (err) {
+                steps.push({ step: 'policy-dep', status: 'error', message: `Failed to apply registry policy: ${err.message}` });
+            }
+
+            // Small delay to allow the sandbox proxy to propagate new network rules
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+
         for (const cmd of ext.installCommands) {
             try {
                 // Resolve sandbox ID from name
@@ -296,16 +307,25 @@ router.post('/api/extensions/install', async (req, res) => {
         }
     }
 
-    const allComplete = steps.every(s => s.status === 'complete' || s.status === 'skipped');
+    // An extension is considered installed when the policy step succeeds.
+    // Install commands (pip/npm) are advisory — the sandbox proxy may block
+    // package registries depending on its configuration, and users can install
+    // packages manually. Only policy and credential steps are required.
+    const criticalSteps = steps.filter(s => s.step === 'policy' || s.step === 'credential');
+    const criticalOk = criticalSteps.every(s => s.status === 'complete' || s.status === 'skipped');
+    const installErrors = steps.filter(s => s.step === 'install' && s.status === 'error');
+    const hasInstallErrors = installErrors.length > 0;
 
     res.json({
-        ok: allComplete,
+        ok: criticalOk,
         extensionId,
         sandboxName,
         steps,
-        message: allComplete
-            ? `Extension '${ext.name}' installed on '${sandboxName}'`
-            : `Extension '${ext.name}' partially installed — check steps for details`,
+        message: criticalOk
+            ? (hasInstallErrors
+                ? `Extension '${ext.name}' installed on '${sandboxName}' (some packages may need manual install)`
+                : `Extension '${ext.name}' installed on '${sandboxName}'`)
+            : `Extension '${ext.name}' failed to install — check steps for details`,
     });
 });
 
@@ -328,20 +348,57 @@ router.post('/api/extensions/uninstall', async (req, res) => {
     }
 
     try {
-        // Remove the policy preset from the sandbox
-        const config = await grpcClient.getSandboxConfig(sandboxName);
-        const currentPolicy = config.policy || {};
-        const networkPolicies = { ...(currentPolicy.networkPolicies || {}) };
+        // Use CLI-based policy removal like the install route.
+        // Get current policy, strip the preset's entries, and re-apply.
+        const policiesPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js');
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        delete require.cache[require.resolve(policiesPath)];
+        const policies = require(policiesPath);
 
-        // Remove the preset's policies
-        delete networkPolicies[ext.policyPreset];
+        // Get the raw current policy YAML
+        let rawPolicy = '';
+        try {
+            const { execSync } = await import('child_process');
+            rawPolicy = execSync(
+                policies.buildPolicyGetCommand(sandboxName),
+                { encoding: 'utf-8', timeout: 10000 }
+            );
+        } catch { /* no current policy */ }
 
-        const updatedPolicy = {
-            ...currentPolicy,
-            networkPolicies,
-        };
+        const currentPolicyYaml = policies.parseCurrentPolicy(rawPolicy);
 
-        await grpcClient.updateConfig(sandboxName, { policy: updatedPolicy });
+        if (currentPolicyYaml) {
+            // Remove the preset's network_policies entries from the YAML
+            // The preset entries are keyed under a top-level name matching the preset
+            const presetContent = policies.loadPreset(ext.policyPreset);
+            const presetEntries = presetContent ? policies.extractPresetEntries(presetContent) : null;
+
+            let cleanedPolicy = currentPolicyYaml;
+            if (presetEntries) {
+                // Strip the preset's entries from the current policy
+                cleanedPolicy = currentPolicyYaml.replace(presetEntries, '').replace(/\n{3,}/g, '\n\n').trim();
+            }
+
+            // Write cleaned policy to temp file and apply
+            const { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } = await import('fs');
+            const { tmpdir } = await import('os');
+
+            const tmpDir = mkdtempSync(join(tmpdir(), 'nemoclaw-policy-'));
+            const tmpFile = join(tmpDir, 'policy.yaml');
+            writeFileSync(tmpFile, cleanedPolicy, { encoding: 'utf-8', mode: 0o600 });
+
+            try {
+                const { execSync: exec2 } = await import('child_process');
+                exec2(
+                    policies.buildPolicySetCommand(tmpFile, sandboxName),
+                    { encoding: 'utf-8', timeout: 15000 }
+                );
+            } finally {
+                try { unlinkSync(tmpFile); } catch {}
+                try { rmdirSync(tmpDir); } catch {}
+            }
+        }
 
         // Clean up credential from environment
         if (ext.credentialKey && process.env[ext.credentialKey]) {

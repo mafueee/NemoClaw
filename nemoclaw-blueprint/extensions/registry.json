@@ -8,7 +8,7 @@
     "policyPreset": "discord",
     "credentialKey": "DISCORD_BOT_TOKEN",
     "credentialLabel": "Discord Bot Token",
-    "installCommands": ["pip install --quiet discord.py"],
+    "installCommands": ["python3 -m pip install --quiet discord.py 2>/dev/null || pip3 install --quiet discord.py"],
     "docs": "https://discord.com/developers/docs"
   },
   {
@@ -20,7 +20,7 @@
     "policyPreset": "telegram",
     "credentialKey": "TELEGRAM_BOT_TOKEN",
     "credentialLabel": "Telegram Bot Token",
-    "installCommands": ["pip install --quiet python-telegram-bot"],
+    "installCommands": ["python3 -m pip install --quiet python-telegram-bot 2>/dev/null || pip3 install --quiet python-telegram-bot"],
     "docs": "https://core.telegram.org/bots/api"
   },
   {
@@ -32,7 +32,7 @@
     "policyPreset": "slack",
     "credentialKey": "SLACK_BOT_TOKEN",
     "credentialLabel": "Slack Bot Token",
-    "installCommands": ["pip install --quiet slack-sdk"],
+    "installCommands": ["python3 -m pip install --quiet slack-sdk 2>/dev/null || pip3 install --quiet slack-sdk"],
     "docs": "https://api.slack.com/docs"
   },
   {
@@ -56,7 +56,7 @@
     "policyPreset": "huggingface",
     "credentialKey": "HF_TOKEN",
     "credentialLabel": "Hugging Face Token",
-    "installCommands": ["pip install --quiet huggingface-hub"],
+    "installCommands": ["python3 -m pip install --quiet huggingface-hub 2>/dev/null || pip3 install --quiet huggingface-hub"],
     "docs": "https://huggingface.co/docs"
   },
   {
