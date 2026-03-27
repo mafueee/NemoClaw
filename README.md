@@ -209,6 +209,68 @@ The **Denial Dashboard** surfaces AI-recommended policy changes from automated d
 
 ---
 
+## Extensions
+
+NemoClaw includes a built-in **Extensions Catalog** for installing integrations into sandboxes. Extensions combine network policy presets, optional credential configuration, and optional in-sandbox package installation — all managed through the dashboard.
+
+### Available Extensions
+
+| Extension | Category | Requires Key | Installs Packages |
+|-----------|----------|:------------:|:------------------:|
+| Discord | Messaging | ✅ `DISCORD_BOT_TOKEN` | `discord.py` |
+| Telegram | Messaging | ✅ `TELEGRAM_BOT_TOKEN` | `python-telegram-bot` |
+| Slack | Messaging | ✅ `SLACK_BOT_TOKEN` | `slack-sdk` |
+| Docker Hub | Dev Tools | — | — |
+| Hugging Face | Dev Tools | ✅ `HF_TOKEN` | `huggingface-hub` |
+| Jira | Productivity | ✅ `JIRA_API_TOKEN` | — |
+| npm | Registry | — | — |
+| PyPI | Registry | — | — |
+| Outlook | Productivity | ✅ `MS_GRAPH_TOKEN` | — |
+
+### How It Works
+
+1. Open the **🧩 Extensions** page in the sidebar.
+2. Select a target sandbox from the dropdown.
+3. Browse extensions by category (Messaging, Dev Tools, Registries, Productivity).
+4. Click **Install** — NemoClaw will:
+   - Apply the network policy preset (allowing sandbox egress to the service's API)
+   - Prompt for credentials if required (optional — can be skipped)
+   - Write the bot token to `/sandbox/.openclaw-data/.channel-env` inside the sandbox via `ExecSandbox` — this persists across agent sessions and container restarts
+   - Run `openclaw doctor --fix` to hot-apply the channel config to the running gateway without a restart
+   - Attempt to install packages via `ExecSandbox` — failures are reported as **advisory warnings** only; the extension is still considered installed if policy and credential steps succeed
+5. To remove an extension, click **Uninstall** — the network policy is removed.
+
+> **After install**: The `nemoclaw-start.sh` entrypoint automatically sources `/sandbox/.openclaw-data/.channel-env` on every container startup, so the bot token persists across container restarts. No manual reconfiguration needed.
+
+### Syncing an Already-Installed Extension
+
+If a sandbox was set up before this mechanism was added, or if the gateway needs reconnecting, use the **sync-channel** API:
+
+```bash
+curl -X POST http://localhost:3000/api/extensions/sync-channel \
+  -H 'Content-Type: application/json' \
+  -d '{"extensionId":"discord","sandboxName":"<your-claw-name>"}'
+```
+
+This re-injects the stored bot token and runs `openclaw doctor --fix` inside the sandbox to hot-apply the channel config to the running gateway.
+
+### Adding Custom Extensions
+
+Add entries to `nemoclaw-blueprint/extensions/registry.json` with the following fields:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique identifier |
+| `name` | Display name |
+| `description` | Short description |
+| `icon` | Emoji icon |
+| `category` | `messaging`, `devtools`, `registry`, or `productivity` |
+| `policyPreset` | Name of the YAML preset in `policies/presets/` |
+| `credentialKey` | Env var name for the API token (or `null`) |
+| `installCommands` | Array of shell commands to run inside the sandbox |
+
+---
+
 ## Web Dashboard
 
 NemoClaw's primary interface is a modern web dashboard for managing every aspect of the platform.
@@ -231,14 +293,20 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
 | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
-| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Select a claw (not a raw sandbox) to chat with — the underlying sandbox name is resolved automatically. On first message, the agent's workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) are loaded from `/sandbox/.openclaw/workspace/` and injected into the system prompt, giving the agent its personality and identity. If workspace files are missing, they are seeded with OpenClaw defaults. Every response displays a **🔒 Sandboxed** or **⚠ Bypassed** badge showing whether inference was policy-constrained. Falls back to direct LLM proxy with warning if transport fails. Also available as an embedded tab inside each Claw Detail page. |
+| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) are loaded and injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
-| **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with line numbers and OPA rule validation. |
-| **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to a per-provider credential vault. Includes Routing Transparency panel. |
+| **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with OPA rule validation. |
+| **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to credential vault. |
 | **⚖️ Denial Dashboard** | AI-recommended policy changes from denial analysis. Review, approve, or reject draft policy chunks with confidence scores and decision history. |
+| **🛡️ Exec Approvals** | Real-time approve/deny queue for agent network/exec requests. Connects via WebSocket proxy to the OpenClaw gateway for live push notifications. |
+| **⚡ Skills** | View all installed agent tools/skills with version, category, and requirements status. Click any skill to inspect its full configuration. |
+| **🧩 Plugins** | Install (npm/path), enable/disable, and remove plugin packages from running sandboxes. |
+| **🧠 Memory Search** | Full-text search over agent memory files with relevance scores. Trigger reindex on demand. |
+| **⏰ Cron Scheduler** | Create, view, and delete scheduled agent tasks with cron expressions. Shows next/last run times. |
 | **🔀 Gateway Lifecycle** | Dedicated gateway page with Start/Stop/Restart controls, container details, and health monitoring. Live health indicator in sidebar. |
 | **🐳 Container Images** | Build custom sandbox images from Dockerfiles with real-time SSE-streamed build output. |
 | **Port Manager** | Interactive port management with inline editing, save/reset, auto-resolve, and source tracking |
+| **🧩 Extensions** | Browse and install integrations (Discord, Telegram, Slack, etc.) onto sandboxes with network policy, credential, and package management |
 | **🔔 Live Updates** | WebSocket-powered real-time sandbox and claw status changes pushed to the dashboard |
 | **📱 Responsive Design** | Fully responsive layout usable on phones, tablets, and desktops |
 
@@ -315,6 +383,16 @@ NemoClaw supports running **multiple independent claw instances** under a single
 | `POST` | `/api/policies/drafts/reject` | Reject a draft chunk |
 | `GET` | `/api/policies/:sandbox/drafts/history` | Decision history timeline |
 
+#### Extensions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/extensions` | List all extensions with install status per sandbox |
+| `GET` | `/api/extensions/:id` | Get a specific extension |
+| `POST` | `/api/extensions/install` | Install an extension on a sandbox |
+| `POST` | `/api/extensions/uninstall` | Remove an extension from a sandbox |
+| `POST` | `/api/extensions/sync-channel` | Re-inject a stored bot token into the sandbox and run `openclaw doctor --fix`. Body: `{extensionId, sandboxName}`. Use to backfill or reconnect a channel. |
+
 #### Inference Routing
 
 | Method | Endpoint | Description |
@@ -329,6 +407,40 @@ The dashboard uses a WebSocket connection (`/ws`) to receive real-time status up
 - **Gateway health** — connection state monitored and broadcast to all clients
 - **Auto-reconnect** — exponential backoff on connection drop
 - **Visual feedback** — sandbox cards flash with a green glow on status changes
+
+### OpenClaw Gateway WebSocket Proxy
+
+The dashboard exposes a bidirectional WebSocket proxy at `/api/sandbox/:name/proxy` that tunnels raw WebSocket frames to the **OpenClaw gateway daemon** (`ws://127.0.0.1:18789`) running inside the sandbox, via `ExecSandbox` gRPC stdin/stdout.
+
+- **Auto-start**: The proxy automatically starts `openclaw gateway` inside the sandbox if it isn't already running.
+- **Live Approvals**: The `ApprovalsList` component connects via this proxy to receive push notifications of agent exec/network requests in real time.
+- **Transport**: A Node.js HTTP-Upgrade bridge script (using only builtins, no deps) runs inside the container, piping raw TCP frames over gRPC's binary `stdin`/`stdout`.
+
+### Sandbox API Proxy Routes
+
+All OpenClaw gateway API endpoints are proxied through the NemoClaw server, tunnelling `curl` calls inside the sandbox via `ExecSandbox`:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sandbox/:name/approvals` | List pending exec/network approval requests |
+| `POST` | `/api/sandbox/:name/approvals/:id/approve` | Approve an exec request |
+| `POST` | `/api/sandbox/:name/approvals/:id/deny` | Deny an exec request |
+| `GET` | `/api/sandbox/:name/sessions` | List agent sessions |
+| `DELETE` | `/api/sandbox/:name/sessions/:id` | Terminate a session |
+| `GET` | `/api/sandbox/:name/agents` | List agents running in the sandbox |
+| `GET` | `/api/sandbox/:name/skills` | List installed agent skills/tools |
+| `GET` | `/api/sandbox/:name/skills/:name` | Inspect a specific skill |
+| `GET` | `/api/sandbox/:name/plugins` | List installed plugins |
+| `POST` | `/api/sandbox/:name/plugins/install` | Install a plugin from npm/path |
+| `POST` | `/api/sandbox/:name/plugins/:name/enable` | Enable a plugin |
+| `POST` | `/api/sandbox/:name/plugins/:name/disable` | Disable a plugin |
+| `DELETE` | `/api/sandbox/:name/plugins/:name` | Remove a plugin |
+| `GET` | `/api/sandbox/:name/memory/search?q=` | Full-text search over agent memory |
+| `POST` | `/api/sandbox/:name/memory/reindex` | Trigger memory reindex |
+| `GET` | `/api/sandbox/:name/cron` | List cron jobs |
+| `POST` | `/api/sandbox/:name/cron` | Create a cron job |
+| `DELETE` | `/api/sandbox/:name/cron/:id` | Delete a cron job |
+| `GET/POST` | `/api/sandbox/:name/browser/:sub` | Pass-through to browser automation API |
 
 ### Responsive Design
 
@@ -403,6 +515,9 @@ We've extended the original into a full management platform by:
 - Implementing a **credential vault** for persistent API key management
 - Adding **custom image building** with SSE-streamed output
 - Building a **real-time monitoring** system with WebSocket live updates
+- Implementing an **extensions catalog** for installing integrations (Discord, Telegram, Slack, etc.) with network policies, credentials, persistent env file injection, and `openclaw doctor --fix` activation
+- Implementing a **bidirectional WebSocket proxy** tunnelling the React frontend to the OpenClaw gateway daemon via gRPC `ExecSandbox` stdin/stdout for real-time agent tool-use approvals
+- Building **feature parity** with the upstream NemoClaw reference implementation: exec approvals, skills viewer, plugin manager, memory search, and cron scheduler — all backed by the sandboxed OpenClaw gateway API
 
 The core sandbox security model — Landlock, seccomp, network namespace isolation, and policy-enforced egress — remains as NVIDIA designed it.
 
