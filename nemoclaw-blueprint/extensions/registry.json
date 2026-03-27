@@ -1,0 +1,110 @@
+[
+  {
+    "id": "discord",
+    "name": "Discord",
+    "description": "Connect your agent to Discord for bot interactions, messaging, and community management.",
+    "icon": "🎮",
+    "category": "messaging",
+    "policyPreset": "discord",
+    "credentialKey": "DISCORD_BOT_TOKEN",
+    "credentialLabel": "Discord Bot Token",
+    "installCommands": ["pip install --quiet discord.py"],
+    "docs": "https://discord.com/developers/docs"
+  },
+  {
+    "id": "telegram",
+    "name": "Telegram",
+    "description": "Enable Telegram Bot API access for messaging, notifications, and command handling.",
+    "icon": "✈️",
+    "category": "messaging",
+    "policyPreset": "telegram",
+    "credentialKey": "TELEGRAM_BOT_TOKEN",
+    "credentialLabel": "Telegram Bot Token",
+    "installCommands": ["pip install --quiet python-telegram-bot"],
+    "docs": "https://core.telegram.org/bots/api"
+  },
+  {
+    "id": "slack",
+    "name": "Slack",
+    "description": "Integrate with Slack for workspace messaging, webhooks, and slash commands.",
+    "icon": "💼",
+    "category": "messaging",
+    "policyPreset": "slack",
+    "credentialKey": "SLACK_BOT_TOKEN",
+    "credentialLabel": "Slack Bot Token",
+    "installCommands": ["pip install --quiet slack-sdk"],
+    "docs": "https://api.slack.com/docs"
+  },
+  {
+    "id": "docker",
+    "name": "Docker Hub",
+    "description": "Allow the agent to pull and push container images from Docker Hub.",
+    "icon": "🐳",
+    "category": "devtools",
+    "policyPreset": "docker",
+    "credentialKey": null,
+    "credentialLabel": null,
+    "installCommands": [],
+    "docs": "https://docs.docker.com/docker-hub/"
+  },
+  {
+    "id": "huggingface",
+    "name": "Hugging Face",
+    "description": "Access Hugging Face models, datasets, and the Inference API.",
+    "icon": "🤗",
+    "category": "devtools",
+    "policyPreset": "huggingface",
+    "credentialKey": "HF_TOKEN",
+    "credentialLabel": "Hugging Face Token",
+    "installCommands": ["pip install --quiet huggingface-hub"],
+    "docs": "https://huggingface.co/docs"
+  },
+  {
+    "id": "jira",
+    "name": "Jira",
+    "description": "Connect to Atlassian Jira for issue tracking, project management, and agile workflows.",
+    "icon": "📋",
+    "category": "productivity",
+    "policyPreset": "jira",
+    "credentialKey": "JIRA_API_TOKEN",
+    "credentialLabel": "Jira API Token",
+    "installCommands": [],
+    "docs": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/"
+  },
+  {
+    "id": "npm",
+    "name": "npm Registry",
+    "description": "Allow access to the npm package registry for installing and publishing Node.js packages.",
+    "icon": "📦",
+    "category": "registry",
+    "policyPreset": "npm",
+    "credentialKey": null,
+    "credentialLabel": null,
+    "installCommands": [],
+    "docs": "https://docs.npmjs.com/"
+  },
+  {
+    "id": "pypi",
+    "name": "PyPI",
+    "description": "Allow access to the Python Package Index for installing and publishing Python packages.",
+    "icon": "🐍",
+    "category": "registry",
+    "policyPreset": "pypi",
+    "credentialKey": null,
+    "credentialLabel": null,
+    "installCommands": [],
+    "docs": "https://pypi.org/help/"
+  },
+  {
+    "id": "outlook",
+    "name": "Microsoft Outlook",
+    "description": "Integrate with Microsoft Outlook and Graph API for email, calendar, and contacts.",
+    "icon": "📧",
+    "category": "productivity",
+    "policyPreset": "outlook",
+    "credentialKey": "MS_GRAPH_TOKEN",
+    "credentialLabel": "Microsoft Graph Token",
+    "installCommands": [],
+    "docs": "https://learn.microsoft.com/en-us/graph/overview"
+  }
+]
