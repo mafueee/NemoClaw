@@ -4,10 +4,9 @@
 // in-sandbox package installation via ExecSandbox gRPC.
 
 import { Router } from 'express';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import * as grpcClient from '../lib/grpcClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +17,47 @@ const router = Router();
 const NEMOCLAW_ROOT = process.env.NEMOCLAW_ROOT || join(__dirname, '..', '..', '..');
 const REGISTRY_PATH = join(NEMOCLAW_ROOT, 'nemoclaw-blueprint', 'extensions', 'registry.json');
 const PRESETS_DIR = join(NEMOCLAW_ROOT, 'nemoclaw-blueprint', 'policies', 'presets');
+const EXT_STATE_PATH = join(NEMOCLAW_ROOT, 'data', 'extensions-state.json');
+
+// ── Extension state persistence ─────────────────────────────────
+// Tracks installed extensions per sandbox in a local JSON file.
+// This is the source of truth for the chat handler's extension awareness.
+
+function loadExtState() {
+    try {
+        if (!existsSync(EXT_STATE_PATH)) return {};
+        return JSON.parse(readFileSync(EXT_STATE_PATH, 'utf-8'));
+    } catch { return {}; }
+}
+
+function saveExtState(state) {
+    try {
+        const dir = dirname(EXT_STATE_PATH);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(EXT_STATE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+    } catch (err) {
+        console.warn('[extensions] Failed to persist state:', err.message);
+    }
+}
+
+function markInstalled(sandboxName, extensionId, credential) {
+    const state = loadExtState();
+    if (!state[sandboxName]) state[sandboxName] = {};
+    state[sandboxName][extensionId] = {
+        installedAt: new Date().toISOString(),
+        ...(credential ? { credential } : {}),
+    };
+    saveExtState(state);
+}
+
+function markUninstalled(sandboxName, extensionId) {
+    const state = loadExtState();
+    if (state[sandboxName]) {
+        delete state[sandboxName][extensionId];
+        if (Object.keys(state[sandboxName]).length === 0) delete state[sandboxName];
+    }
+    saveExtState(state);
+}
 
 // ── Registry Loader ─────────────────────────────────────────────
 
@@ -237,7 +277,47 @@ router.post('/api/extensions/install', async (req, res) => {
         steps.push({ step: 'credential', status: 'skipped', message: `No credential provided for '${ext.credentialLabel || ext.credentialKey}'` });
     }
 
-    // Step 3: Run install commands inside sandbox via ExecSandbox
+    // Step 3: Register as OpenClaw channel (for messaging extensions)
+    // This runs `openclaw channels add --channel <name> --token <token>` inside
+    // the sandbox so the agent can natively send/receive messages via the gateway.
+    if (ext.channelName && credential) {
+        try {
+            let sandboxId = sandboxName;
+            try {
+                const resp = await grpcClient.getSandbox(sandboxName);
+                sandboxId = resp.sandbox?.id || sandboxName;
+            } catch { /* use name as fallback */ }
+
+            const channelCmd = `openclaw channels add --channel ${ext.channelName} --token '${credential.replace(/'/g, "'\\''")}'`;
+            const stream = grpcClient.execSandbox(sandboxId, ['bash', '-c', channelCmd], {
+                timeoutSeconds: 30,
+            });
+            const result = await collectExecResult(stream);
+
+            if (result.exitCode === 0) {
+                steps.push({
+                    step: 'channel',
+                    status: 'complete',
+                    message: `OpenClaw channel '${ext.channelName}' registered`,
+                });
+            } else {
+                const errDetail = (result.stderr || result.stdout || '').trim().slice(0, 300);
+                steps.push({
+                    step: 'channel',
+                    status: 'error',
+                    message: `Channel registration failed (exit ${result.exitCode}): ${errDetail}`,
+                });
+            }
+        } catch (err) {
+            steps.push({
+                step: 'channel',
+                status: 'error',
+                message: `Channel registration failed: ${err.message}`,
+            });
+        }
+    }
+
+    // Step 4: Run install commands inside sandbox via ExecSandbox
     // First, auto-apply any required package registry policies so pip/npm can
     // download packages through the sandbox proxy.
     if (ext.installCommands && ext.installCommands.length > 0) {
@@ -307,14 +387,18 @@ router.post('/api/extensions/install', async (req, res) => {
         }
     }
 
-    // An extension is considered installed when the policy step succeeds.
-    // Install commands (pip/npm) are advisory — the sandbox proxy may block
-    // package registries depending on its configuration, and users can install
-    // packages manually. Only policy and credential steps are required.
-    const criticalSteps = steps.filter(s => s.step === 'policy' || s.step === 'credential');
+    // An extension is considered installed when policy + credential + channel steps succeed.
+    // Install commands (pip/npm) are advisory — packages are pre-installed in the Docker image.
+    // Only policy, credential, and channel registration steps are critical.
+    const criticalSteps = steps.filter(s => s.step === 'policy' || s.step === 'credential' || s.step === 'channel');
     const criticalOk = criticalSteps.every(s => s.status === 'complete' || s.status === 'skipped');
     const installErrors = steps.filter(s => s.step === 'install' && s.status === 'error');
     const hasInstallErrors = installErrors.length > 0;
+
+    // Persist state so chat handler knows about installed extensions
+    if (criticalOk) {
+        markInstalled(sandboxName, extensionId, credential || null);
+    }
 
     res.json({
         ok: criticalOk,
@@ -400,10 +484,11 @@ router.post('/api/extensions/uninstall', async (req, res) => {
             }
         }
 
-        // Clean up credential from environment
+        // Clean up credential from environment and state file
         if (ext.credentialKey && process.env[ext.credentialKey]) {
             delete process.env[ext.credentialKey];
         }
+        markUninstalled(sandboxName, extensionId);
 
         res.json({
             ok: true,
