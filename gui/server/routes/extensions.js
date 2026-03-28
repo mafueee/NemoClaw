@@ -128,9 +128,10 @@ function collectExecResult(stream) {
  * Strategy:
  *  1. Use Python (with the token passed as argv[1] to avoid all shell escaping)
  *     to write a persistent env file to the writable /sandbox/.openclaw-data volume.
- *  2. Use the gRPC UpdateConfig call to inject the env var directly into the sandbox
- *     environment — this is the same approach used for inference provider credentials
- *     and is far more reliable than trying to restart the openclaw daemon.
+ *  2. Restart the openclaw gateway daemon with the token explicitly in its env
+ *     using 'env KEY=VALUE' so it persists in the daemon's process environment.
+ *  3. Use the gRPC UpdateConfig call to inject the env var directly into the sandbox
+ *     environment — this is an additional belt-and-suspenders approach.
  *
  * The `openclaw doctor --fix` approach was removed because `openclaw` is often not
  * in the ExecSandbox PATH, causing a silent no-op that is indistinguishable from
@@ -189,22 +190,38 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
         }
         console.log(`[extensions] ${envVar} env file written in sandbox ${sandboxId}`);
 
-        // Restart openclaw gateway to load the new token environment.
+        // Restart the openclaw gateway so it picks up the new token from .channel-env.
+        //
+        // Strategy: source .channel-env into the current shell, then kill the running
+        // gateway process and restart it with DISCORD_BOT_TOKEN (and others) in its env.
+        //
+        // We use the `env` command to explicitly pass the token to the launched process
+        // so it survives in the daemon's env regardless of sourcing.
         const restartCmd = [
-            'pkill -f "openclaw gateway" || true',
+            // Source the env file so this shell has the token
+            '. /sandbox/.openclaw-data/.channel-env 2>/dev/null || true',
+            // Kill any existing gateway
+            'pkill -f "openclaw gateway" 2>/dev/null || pkill -f "nemoclaw-gateway" 2>/dev/null || true',
             'sleep 1',
-            '[ -f /sandbox/.openclaw-data/.channel-env ] && . /sandbox/.openclaw-data/.channel-env',
-            'nohup openclaw gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 &'
+            // Find the openclaw binary wherever it lives
+            'OPENCLAW_BIN=$(which openclaw 2>/dev/null || ls /usr/local/bin/openclaw /usr/bin/openclaw /root/.local/bin/openclaw /home/user/.local/bin/openclaw 2>/dev/null | head -1)',
+            // Start the gateway with the token explicitly in its env using the `env` trick
+            // nohup ensures it keeps running after this shell exits
+            `[ -n "$OPENCLAW_BIN" ] && nohup env ${envVar}=$${envVar} "$OPENCLAW_BIN" gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 & echo "GATEWAY_STARTED:$!" || echo "GATEWAY_BIN_NOT_FOUND"`,
         ].join('; ');
 
         const restartStream = grpcClient.execSandbox(sandboxId, [
             'bash', '-c', restartCmd,
-        ], { timeoutSeconds: 15 });
+        ], { timeoutSeconds: 20 });
         const restartRes = await collectExecResult(restartStream);
-        if (restartRes.exitCode !== 0) {
-            console.warn(`[extensions] Gateway restart failed: ${restartRes.stderr}`);
+        const restartOut = (restartRes.stdout + restartRes.stderr).trim();
+
+        if (restartOut.includes('GATEWAY_STARTED')) {
+            console.log(`[extensions] ✓ Gateway restarted with ${envVar} in its environment (sandbox ${sandboxId})`);
+        } else if (restartOut.includes('GATEWAY_BIN_NOT_FOUND')) {
+            console.warn(`[extensions] openclaw binary not found in sandbox — token written to env file, will load on next sandbox restart`);
         } else {
-            console.log(`[extensions] Gateway restarted successfully to load ${envVar}`);
+            console.warn(`[extensions] Gateway restart uncertain: ${restartOut.slice(0, 200)}`);
         }
     } catch (err) {
         console.warn(`[extensions] configureChannelInSandbox: ExecSandbox write failed: ${err.message}`);
@@ -478,7 +495,7 @@ router.post('/api/extensions/install', async (req, res) => {
     // Install commands (pip/npm) are advisory — packages are pre-installed in the Docker image.
     // Only policy, credential, and channel registration steps are critical.
     const criticalSteps = steps.filter(s => s.step === 'policy' || s.step === 'credential' || s.step === 'channel');
-    const criticalOk = criticalSteps.every(s => s.status === 'complete' || s.status === 'skipped');
+    const criticalOk = criticalSteps.every(s => s.status === 'complete' || s.status === 'skipped' || s.status === 'warning');
     const hasInstallWarnings = steps.some(s => s.step === 'install' && s.status === 'warning');
 
     // Persist state so chat handler knows about installed extensions
