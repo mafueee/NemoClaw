@@ -62,25 +62,35 @@ async function getSandboxDetail(name) {
 
 // ── CRUD Operations ────────────────────────────────────────────────
 
-/** List all claws with live status cross-referenced from openshell */
+/** List all claws with live status cross-referenced from openshell.
+ *  Persists discovered status back to disk so 'creating' -> 'running' sticks. */
 export async function listClaws() {
     const claws = loadClaws();
     const liveSandboxes = await getLiveSandboxes();
     const liveMap = new Map(liveSandboxes.map(s => [s.name, s]));
 
-    return claws.map(claw => {
+    let dirty = false;
+    const result = claws.map(claw => {
         const live = liveMap.get(claw.sandboxName);
+        const resolvedStatus = live ? mapSandboxStatus(live.status) : 'stopped';
+        // Persist status change back to disk
+        if (claw.status !== resolvedStatus) {
+            claw.status = resolvedStatus;
+            dirty = true;
+        }
         return {
             ...claw,
             sandboxStatus: live ? live.status : 'not-found',
-            status: live
-                ? mapSandboxStatus(live.status)
-                : 'stopped',
+            status: resolvedStatus,
         };
     });
+
+    if (dirty) saveClaws(claws);
+    return result;
 }
 
-/** Get a single claw by ID with enriched status */
+/** Get a single claw by ID with enriched status.
+ *  Persists discovered status back to disk. */
 export async function getClaw(id) {
     const claws = loadClaws();
     const claw = claws.find(c => c.id === id);
@@ -90,10 +100,16 @@ export async function getClaw(id) {
     const live = liveSandboxes.find(s => s.name === claw.sandboxName);
     const detail = await getSandboxDetail(claw.sandboxName);
 
+    const resolvedStatus = live ? mapSandboxStatus(live.status) : 'stopped';
+    if (claw.status !== resolvedStatus) {
+        claw.status = resolvedStatus;
+        saveClaws(claws);
+    }
+
     return {
         ...claw,
         sandboxStatus: live ? live.status : 'not-found',
-        status: live ? mapSandboxStatus(live.status) : 'stopped',
+        status: resolvedStatus,
         detail: detail.ok ? detail.output : null,
         detailData: detail.data || null,
     };
@@ -216,6 +232,57 @@ export async function getGateways() {
     } catch {
         return [];
     }
+}
+
+/**
+ * Reconcile the local claw registry with the live gateway state.
+ * - Updates every claw's status from the gateway sandbox phase.
+ * - Removes claws whose sandbox no longer exists and that were created >24 h ago.
+ * Call once at server startup and optionally on a timer.
+ */
+export async function syncAndPersist() {
+    const claws = loadClaws();
+    const liveSandboxes = await getLiveSandboxes();
+    const liveMap = new Map(liveSandboxes.map(s => [s.name, s]));
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+    const kept = [];
+    for (const claw of claws) {
+        const live = liveMap.get(claw.sandboxName);
+        if (live) {
+            claw.status = mapSandboxStatus(live.status);
+            kept.push(claw);
+        } else {
+            // Remove if older than 24 h and sandbox is gone
+            const created = claw.createdAt ? new Date(claw.createdAt).getTime() : 0;
+            if (created && created < cutoff) {
+                console.log(`[sync] Removing stale claw '${claw.id}' (sandbox gone, created ${claw.createdAt})`);
+            } else {
+                kept.push(claw); // keep recently-created entries even if sandbox is missing
+            }
+        }
+    }
+
+    // Auto-discover sandboxes not in registry
+    const registeredNames = new Set(kept.map(c => c.sandboxName));
+    for (const s of liveSandboxes) {
+        if (!registeredNames.has(s.name)) {
+            kept.push({
+                id: s.name,
+                sandboxName: s.name,
+                gatewayName: 'nemoclaw',
+                createdAt: s.createdAt || new Date().toISOString(),
+                lastConnected: null,
+                config: {},
+                status: mapSandboxStatus(s.status),
+                discovered: true,
+            });
+            console.log(`[sync] Auto-registered orphaned sandbox '${s.name}' as claw`);
+        }
+    }
+
+    saveClaws(kept);
+    return kept;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

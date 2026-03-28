@@ -1,11 +1,13 @@
-// ClawDetail — Single claw detail view with tabs for overview, monitor, logs, config, and policy
+// ClawDetail — Single claw detail view with tabs for overview, chat, monitor, logs, config, and policy
 import { useState, useEffect, useCallback } from 'react';
 import { api, streamLogs } from '../../api/client';
 import type { ClawInstance } from '../../api/client';
 import { ClawMonitor } from './ClawMonitor';
+import { ClawWorkspace } from './ClawWorkspace';
+import { ChatInterface } from '../chat/ChatInterface';
 
 interface Props { clawId: string; onNavigate?: (path: string) => void; }
-type TabId = 'overview' | 'monitor' | 'logs' | 'config' | 'policy';
+type TabId = 'overview' | 'chat' | 'monitor' | 'logs' | 'files' | 'config' | 'policy';
 
 export function ClawDetail({ clawId, onNavigate }: Props) {
     const [claw, setClaw] = useState<ClawInstance | null>(null);
@@ -44,8 +46,11 @@ export function ClawDetail({ clawId, onNavigate }: Props) {
     if (!claw) return <div className="page-container"><p>Claw not found.</p></div>;
 
     const tabs: { id: TabId; label: string; icon: string }[] = [
-        { id: 'overview', label: 'Overview', icon: '📋' }, { id: 'monitor', label: 'Monitor', icon: '📊' },
-        { id: 'logs', label: 'Logs', icon: '📜' }, { id: 'config', label: 'Config', icon: '⚙️' },
+        { id: 'overview', label: 'Overview', icon: '📋' }, { id: 'chat', label: 'Chat', icon: '💬' },
+        { id: 'monitor', label: 'Monitor', icon: '📊' },
+        { id: 'logs', label: 'Logs', icon: '📜' },
+        { id: 'files', label: 'Files', icon: '📂' },
+        { id: 'config', label: 'Config', icon: '⚙️' },
         { id: 'policy', label: 'Policy', icon: '🛡️' },
     ];
 
@@ -81,6 +86,7 @@ export function ClawDetail({ clawId, onNavigate }: Props) {
                 {claw.detail && <div className="card"><h3 style={{ marginTop: 0 }}>Sandbox Detail</h3><pre style={{ fontSize: '0.75rem', overflow: 'auto', maxHeight: '300px', whiteSpace: 'pre-wrap' }}>{claw.detail}</pre></div>}
                 </div>
             )}
+            {activeTab === 'chat' && <ChatInterface clawId={clawId} embedded />}
             {activeTab === 'monitor' && <ClawMonitor clawId={clawId} />}
             {activeTab === 'logs' && (
                 <div className="card"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--nc-spacing-sm)' }}><h3 style={{ margin: 0 }}>📜 Live Logs</h3>{logActive && <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>Streaming</span>}</div>
@@ -88,6 +94,7 @@ export function ClawDetail({ clawId, onNavigate }: Props) {
                     {logLines.length === 0 ? <div style={{ color: 'var(--nc-text-muted)' }}>Waiting for log data...</div> : logLines.map((line, i) => <div key={i} style={{ color: '#e0e0e0', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{line}</div>)}
                 </div></div>
             )}
+            {activeTab === 'files' && <ClawWorkspace clawId={clawId} />}
             {activeTab === 'config' && (
                 <div className="card"><h3 style={{ marginTop: 0 }}>⚙️ Inference Configuration</h3>
                 <div className="form-group" style={{ marginBottom: 'var(--nc-spacing-md)' }}><label style={{ display: 'block', marginBottom: '4px', fontSize: '0.85rem', fontWeight: 600 }}>Provider</label><input className="form-input" value={configForm.provider} onChange={e => setConfigForm(p => ({ ...p, provider: e.target.value }))} placeholder="e.g. cloud, ollama, openrouter" /></div>

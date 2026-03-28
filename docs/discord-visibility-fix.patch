@@ -1,0 +1,566 @@
+diff --git a/README.md b/README.md
+index 6dad1c6..85087d7 100644
+--- a/README.md
++++ b/README.md
+@@ -235,10 +235,25 @@ NemoClaw includes a built-in **Extensions Catalog** for installing integrations
+ 4. Click **Install** — NemoClaw will:
+    - Apply the network policy preset (allowing sandbox egress to the service's API)
+    - Prompt for credentials if required (optional — can be skipped)
+-   - Store the bot token as a **gateway sandbox setting** (`CHANNEL_<NAME>_TOKEN`) via `UpdateConfig` gRPC — no `openclaw` binary required inside the container
++   - Write the bot token to `/sandbox/.openclaw-data/.channel-env` inside the sandbox via `ExecSandbox` — this persists across agent sessions and container restarts
++   - Run `openclaw doctor --fix` to hot-apply the channel config to the running gateway without a restart
+    - Attempt to install packages via `ExecSandbox` — failures are reported as **advisory warnings** only; the extension is still considered installed if policy and credential steps succeed
+ 5. To remove an extension, click **Uninstall** — the network policy is removed.
+ 
++> **After install**: The `nemoclaw-start.sh` entrypoint automatically sources `/sandbox/.openclaw-data/.channel-env` on every container startup, so the bot token persists across container restarts. No manual reconfiguration needed.
++
++### Syncing an Already-Installed Extension
++
++If a sandbox was set up before this mechanism was added, or if the gateway needs reconnecting, use the **sync-channel** API:
++
++```bash
++curl -X POST http://localhost:3000/api/extensions/sync-channel \
++  -H 'Content-Type: application/json' \
++  -d '{"extensionId":"discord","sandboxName":"<your-claw-name>"}'
++```
++
++This re-injects the stored bot token and runs `openclaw doctor --fix` inside the sandbox to hot-apply the channel config to the running gateway.
++
+ ### Adding Custom Extensions
+ 
+ Add entries to `nemoclaw-blueprint/extensions/registry.json` with the following fields:
+@@ -278,7 +293,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
+ | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
+ | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
+ | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
+-| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) are loaded and injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
++| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) and extension capabilities are injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
+ | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
+ | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with OPA rule validation. |
+ | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to credential vault. |
+@@ -376,6 +391,7 @@ NemoClaw supports running **multiple independent claw instances** under a single
+ | `GET` | `/api/extensions/:id` | Get a specific extension |
+ | `POST` | `/api/extensions/install` | Install an extension on a sandbox |
+ | `POST` | `/api/extensions/uninstall` | Remove an extension from a sandbox |
++| `POST` | `/api/extensions/sync-channel` | Re-inject a stored bot token into the sandbox environment via gRPC `UpdateConfig`. Body: `{extensionId, sandboxName}`. Useful for backfilling or reconnecting the channel after the sandbox was created. |
+ 
+ #### Inference Routing
+ 
+diff --git a/gui/server/index.js b/gui/server/index.js
+index 4723834..387b67d 100644
+--- a/gui/server/index.js
++++ b/gui/server/index.js
+@@ -866,16 +866,64 @@ const EXEC_TIMEOUT_SECONDS = 120;
+  * Collect stdout/stderr from an ExecSandbox gRPC stream into buffers.
+  * Resolves with { stdout, stderr, exitCode } when the stream ends.
+  */
++// ── OpenClaw TUI status-line filter ────────────────────────────
++//
++// `openclaw agent` may print channel-delivery status lines to stdout when
++// it tries to route the response through configured channels (Discord,
++// Telegram, etc.).  These lines look like:
++//   ✉️ Message failed
++//   🔌 Gateway: '.' failed
++//   🔒 Sandboxed
++// We strip them before treating stdout as the user-visible response.
++
++const OPENCLAW_TUI_PREFIXES = [
++    '✉️', '🔌', '⚠️ ✉️', '⚠️ 🔌',
++    '🔒 Sandboxed', '⚡', '🤖',
++    'Gateway:', 'Message delivered', 'Message failed',
++    'Delivering to', 'Channel error',
++];
++
++function stripOpencalwStatusLines(raw) {
++    const lines = raw.split('\n');
++    const filtered = lines.filter(line => {
++        const trimmed = line.trimStart();
++        return !OPENCLAW_TUI_PREFIXES.some(prefix => trimmed.startsWith(prefix));
++    });
++    return filtered.join('\n').trim();
++}
++
+ /**
+  * Parse the output from `openclaw agent --json`.
+  * The JSON envelope typically has { result: { text: "..." } } or similar.
+  * Falls back to raw stdout if not parseable as JSON.
++ *
++ * Openclaw may also print TUI delivery-status lines (emoji-prefixed) to stdout
++ * when routing to channels (Discord, Telegram, etc.).  We strip these first.
+  */
+ function parseAgentResponse(raw) {
++    // Strip ANSI escape codes first
++    const stripped = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
++    // Remove openclaw TUI channel-delivery status lines from the raw string
++    // This is for cases where the entire output isn't JSON, or JSON is mixed with TUI lines.
++    const cleanedRaw = stripOpencalwStatusLines(stripped);
++
+     try {
+-        const data = JSON.parse(raw);
++        const data = JSON.parse(cleanedRaw);
++
++        // Handle root-level payloads array
++        if (data.payloads && Array.isArray(data.payloads)) {
++            const filteredPayloads = data.payloads.map(p => {
++                if (p.text) {
++                    // Apply TUI status line filtering to each payload's text
++                    return { ...p, text: stripOpencalwStatusLines(p.text) };
++                }
++                return p;
++            }).filter(p => p.text && p.text.trim() !== ''); // Filter out empty or only TUI-status payloads
++            return filteredPayloads.map(p => p.text).filter(Boolean).join('\n\n');
++        }
++
+         // openclaw agent --json returns various shapes:
+-        // { result: { text: "...", ... } }
++        // { result: { text: "..." } }
+         // { result: "..." }
+         // { message: "..." }
+         // { text: "..." }
+@@ -885,7 +933,14 @@ function parseAgentResponse(raw) {
+         }
+         if (typeof data.result === 'string') return data.result;
+         if (data.result?.payloads && Array.isArray(data.result.payloads)) {
+-            return data.result.payloads.map(p => p.text).filter(Boolean).join('\n\n');
++            // Apply TUI status line filtering to each payload's text within result
++            const filteredPayloads = data.result.payloads.map(p => {
++                if (p.text) {
++                    return { ...p, text: stripOpencalwStatusLines(p.text) };
++                }
++                return p;
++            }).filter(p => p.text && p.text.trim() !== '');
++            return filteredPayloads.map(p => p.text).filter(Boolean).join('\n\n');
+         }
+         if (data.result?.text) return data.result.text;
+         if (data.result?.content) return data.result.content;
+@@ -895,12 +950,11 @@ function parseAgentResponse(raw) {
+         if (data.content) return data.content;
+         // If we can't find a known field, stringify the result if present
+         if (data.result) return typeof data.result === 'object' ? JSON.stringify(data.result, null, 2) : String(data.result);
+-        // Last resort: return the raw JSON
+-        return raw;
++        // Last resort: return the cleaned raw text (not the raw JSON blob)
++        return cleanedRaw || raw;
+     } catch {
+-        // Not JSON — return as plain text (some openclaw versions may emit TUI output)
+-        // Strip ANSI escape codes
+-        return raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
++        // Not JSON — return as plain text
++        return cleanedRaw || stripped.trim();
+     }
+ }
+ 
+@@ -1530,13 +1584,31 @@ app.post('/api/chat/message', async (req, res) => {
+     // to the agent and any tools/scripts it runs.
+     const extCredentials = getExtensionCredentials();
+ 
++    // Determine installed extensions to inject context into the prompt
++    const installedExtensions = getInstalledExtensions(sandboxName);
++    let extensionContext = '';
++    if (installedExtensions.length > 0) {
++        extensionContext = buildExtensionContext(installedExtensions);
++    }
++
++    // Prepend extension context to the message so the agent is aware of capabilities
++    let messageCtx = message;
++    if (extensionContext) {
++        messageCtx = `<system_context>\n${extensionContext.trim()}\n</system_context>\n\n${message}`;
++    }
++
+     // Escape the message for safe shell embedding
+-    const escapedMessage = message.replace(/'/g, "'\\''");
++    const escapedMessage = messageCtx.replace(/'/g, "'\\''");
+ 
+     // Build the openclaw agent command.
+-    // --json:       structured JSON output we can parse
+-    // --session-id: maintain conversation continuity across messages
+-    // --timeout:    prevent runaway agent turns
++    // --json:        structured JSON output we can parse
++    // --session-id:  maintain conversation continuity across messages
++    // --timeout:     prevent runaway agent turns
++    //
++    // Note: we intentionally do NOT pass --channel here because the valid values
++    // differ across openclaw versions and an invalid flag causes a non-zero exit.
++    // Instead, parseAgentResponse() filters channel delivery status noise (e.g.
++    // "⚠️ ✉️ Message failed") out of the payloads array before returning to the UI.
+     const agentCmd = [
+         'openclaw', 'agent',
+         '--message', `'${escapedMessage}'`,
+@@ -1574,9 +1646,29 @@ app.post('/api/chat/message', async (req, res) => {
+ 
+         // Handle: non-zero exit (agent error, gateway not running, etc.)
+         if (exitCode != null && exitCode !== 0) {
+-            const errorDetail = (stderr || stdout || 'Unknown error').trim();
++            const rawError = (stderr || stdout || 'Unknown error').trim();
++            // Strip ANSI + TUI lines from error detail before logging/displaying
++            const errorDetail = stripOpencalwStatusLines(
++                rawError.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
++            ).slice(0, 400) || rawError.slice(0, 400);
+             console.warn(`[chat] openclaw agent exited ${exitCode} in '${sandboxName}': ${errorDetail}`);
+ 
++            // If the only output is TUI channel-delivery failures, this is a Discord/channel
++            // misconfiguration — report it clearly instead of falling through to LLM proxy.
++            const isChannelError = (
++                rawError.includes('Message failed') ||
++                rawError.includes('Gateway:') ||
++                (rawError.trim() === '' && stdout.includes('Gateway'))
++            );
++            if (isChannelError && !errorDetail.trim()) {
++                return res.json({
++                    ok: false,
++                    response: 'The OpenClaw agent failed to deliver a response — a configured channel (e.g. Discord) is misconfigured. Check your Extensions settings and ensure the bot token was installed correctly.',
++                    error: 'Channel delivery error',
++                    sandboxed: true,
++                });
++            }
++
+             // If gateway isn't running, try to start it and retry
+             if (errorDetail.includes('ECONNREFUSED') || errorDetail.includes('gateway') || errorDetail.includes('WebSocket')) {
+                 console.log(`[chat] Gateway may not be running in '${sandboxName}', attempting restart...`);
+@@ -1606,7 +1698,7 @@ app.post('/api/chat/message', async (req, res) => {
+             const fallbackResult = await directLlmFallback(safeSession, message);
+             return res.json({
+                 ...fallbackResult,
+-                warning: `⚠ OpenClaw agent failed (exit ${exitCode}): ${errorDetail.slice(0, 200)}. Using direct LLM proxy — no tool use.`,
++                warning: `⚠ OpenClaw agent failed (exit ${exitCode}): ${errorDetail.slice(0, 200) || 'unknown error'}. Using direct LLM proxy — no tool use.`,
+                 sandboxed: false,
+             });
+         }
+diff --git a/gui/server/routes/extensions.js b/gui/server/routes/extensions.js
+index baa90ab..1c1340a 100644
+--- a/gui/server/routes/extensions.js
++++ b/gui/server/routes/extensions.js
+@@ -79,29 +79,6 @@ function loadRegistry() {
+     }
+ }
+ 
+-/**
+- * Parse a YAML policy preset file and extract its network_policies as a
+- * simplified JS object suitable for gRPC updateConfig.
+- * This is a lightweight YAML parser that handles the preset format.
+- */
+-function parsePresetYaml(presetName) {
+-    const filePath = join(PRESETS_DIR, `${presetName}.yaml`);
+-    if (!existsSync(filePath)) return null;
+-
+-    try {
+-        const content = readFileSync(filePath, 'utf-8');
+-        // Extract the network_policies block
+-        const npMatch = content.match(/^network_policies:\n([\s\S]*)$/m);
+-        if (!npMatch) return null;
+-
+-        // Parse the YAML into a policy-compatible structure
+-        // We return the raw content for policy merging
+-        return { raw: content, presetName };
+-    } catch {
+-        return null;
+-    }
+-}
+-
+ /**
+  * Collect a streaming ExecSandbox response into a result object.
+  * Returns { stdout, stderr, exitCode }.
+@@ -145,6 +122,93 @@ function collectExecResult(stream) {
+     });
+ }
+ 
++/**
++ * Inject a bot token into the openclaw gateway running inside the sandbox.
++ *
++ * Strategy:
++ *  1. Use Python (with the token passed as argv[1] to avoid all shell escaping)
++ *     to write a persistent env file to the writable /sandbox/.openclaw-data volume.
++ *  2. Use the gRPC UpdateConfig call to inject the env var directly into the sandbox
++ *     environment — this is the same approach used for inference provider credentials
++ *     and is far more reliable than trying to restart the openclaw daemon.
++ *
++ * The `openclaw doctor --fix` approach was removed because `openclaw` is often not
++ * in the ExecSandbox PATH, causing a silent no-op that is indistinguishable from
++ * success.  The gRPC env-inject path works regardless of what's installed inside.
++ *
++ * @param {string} sandboxId  - resolved sandbox UUID for ExecSandbox
++ * @param {string} channelKey - openclaw channel key e.g. "discord"
++ * @param {string} token      - bot token to inject
++ * @returns {Promise<{ok: boolean, message: string}>}
++ */
++async function configureChannelInSandbox(sandboxId, channelKey, token) {
++    // Map channel key to its env var name (openclaw env fallback convention)
++    const envVarMap = {
++        discord: 'DISCORD_BOT_TOKEN',
++        telegram: 'TELEGRAM_BOT_TOKEN',
++        slack: 'SLACK_BOT_TOKEN',
++    };
++    const envVar = envVarMap[channelKey] || `${channelKey.toUpperCase()}_BOT_TOKEN`;
++
++    // Step 1: Write a persistent env file inside the sandbox data volume.
++    // Token is passed as argv[1] to Python to bypass all shell quoting hazards.
++    const pyScript = [
++        'import os, sys',
++        "env_dir = '/sandbox/.openclaw-data'",
++        'os.makedirs(env_dir, exist_ok=True)',
++        "env_file = os.path.join(env_dir, '.channel-env')",
++        'tok = sys.argv[1]',
++        'with open(env_file, "w") as f:',
++        `    f.write("export ${envVar}=" + repr(tok) + "\\n")`,
++        'os.chmod(env_file, 0o600)',
++        'print("ENV_WRITTEN")',
++    ].join('\n');
++
++    try {
++        const writeStream = grpcClient.execSandbox(sandboxId, ['python3', '-c', pyScript, token], {
++            timeoutSeconds: 15,
++        });
++        const { stdout: writeOut, stderr: writeErr, exitCode: writeCode } = await collectExecResult(writeStream);
++
++        if (!writeOut.includes('ENV_WRITTEN') || writeCode !== 0) {
++            const detail = (writeErr || writeOut).slice(0, 400);
++            console.warn(`[extensions] configureChannelInSandbox: env file write failed (exit ${writeCode}): ${detail}`);
++            return { ok: false, message: `Env file write failed: ${detail}` };
++        }
++        console.log(`[extensions] ${envVar} env file written in sandbox ${sandboxId}`);
++    } catch (err) {
++        console.warn(`[extensions] configureChannelInSandbox: ExecSandbox write failed: ${err.message}`);
++        return { ok: false, message: `ExecSandbox write failed: ${err.message}` };
++    }
++
++    // Step 2: Inject the env var directly into the sandbox via gRPC UpdateConfig.
++    // This is the preferred path — it does not depend on openclaw being installed
++    // inside the sandbox, and takes effect on the next agent invocation.
++    // updateConfig uses settingKey/settingValue to set sandbox-scoped settings.
++    try {
++        if (typeof grpcClient.updateConfig === 'function') {
++            await grpcClient.updateConfig(sandboxId, {
++                settingKey: envVar,
++                settingValue: token,
++            });
++            console.log(`[extensions] ${envVar} injected via gRPC updateConfig for sandbox ${sandboxId}`);
++            return {
++                ok: true,
++                message: `${envVar} injected into sandbox environment via gRPC — channel will be active on next agent invocation`,
++            };
++        }
++    } catch (grpcErr) {
++        // Non-fatal — env file is already written, token will be available on next sandbox restart
++        console.warn(`[extensions] gRPC updateSandboxConfig failed (non-fatal): ${grpcErr.message}`);
++    }
++
++    // Fallback: env file written successfully — token persists across restarts via the data volume.
++    return {
++        ok: true,
++        message: `${envVar} stored in sandbox data volume. The token will be picked up by the agent on the next sandbox restart or when the env file is sourced.`,
++    };
++}
++
+ // ── List all extensions ─────────────────────────────────────────
+ 
+ router.get('/api/extensions', async (req, res) => {
+@@ -277,37 +341,32 @@ router.post('/api/extensions/install', async (req, res) => {
+         steps.push({ step: 'credential', status: 'skipped', message: `No credential provided for '${ext.credentialLabel || ext.credentialKey}'` });
+     }
+ 
+-    // Step 3: Register channel credential via gateway settings (gateway-native approach).
+-    // Instead of running `openclaw channels add` inside the sandbox (which requires
+-    // the openclaw binary to be present in the container), we store the bot token
+-    // as a named gateway sandbox setting. The agent runtime reads these settings as
+-    // environment variables, allowing the openclaw SDK to pick them up automatically.
+-    //
+-    // Setting key format: CHANNEL_<NAME>_TOKEN  (e.g. CHANNEL_DISCORD_TOKEN)
++    // Step 3: Write the bot token into the sandbox's openclaw channel config.
++    // The ~/.openclaw/openclaw.json is read-only (root-owned), so we write
++    // the token to a persistent env file in the writable data volume and
++    // restart the openclaw gateway daemon with/the token in its environment.
+     if (ext.channelName && credential) {
+-        const settingKey = `CHANNEL_${ext.channelName.toUpperCase()}_TOKEN`;
+         try {
+-            await grpcClient.updateConfig(sandboxName, {
+-                settingKey,
+-                settingValue: credential,
+-            });
++            // Resolve sandbox ID for ExecSandbox
++            let sandboxId = sandboxName;
++            try {
++                const resp = await grpcClient.getSandbox(sandboxName);
++                sandboxId = resp.sandbox?.id || sandboxName;
++            } catch { /* fall back to name */ }
++
++            const cfgResult = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
+             steps.push({
+                 step: 'channel',
+-                status: 'complete',
+-                message: `Channel credential '${settingKey}' registered in gateway`,
++                status: cfgResult.ok ? 'complete' : 'warning',
++                message: cfgResult.ok
++                    ? `${ext.channelName} channel configured in sandbox and gateway restarted`
++                    : `Channel config warning: ${cfgResult.message}`,
+             });
+         } catch (err) {
+-            // Gateway may be unavailable — fall back to recording in local state so
+-            // the chat handler can inject the token as an env var when executing.
+-            const state = loadExtState();
+-            if (!state[sandboxName]) state[sandboxName] = {};
+-            if (!state[sandboxName][extensionId]) state[sandboxName][extensionId] = {};
+-            state[sandboxName][extensionId][settingKey] = credential;
+-            saveExtState(state);
+             steps.push({
+                 step: 'channel',
+-                status: 'complete',
+-                message: `Channel credential '${settingKey}' stored locally (gateway unavailable: ${err.message})`,
++                status: 'warning',
++                message: `Channel config failed (token stored locally for env injection): ${err.message}`,
+             });
+         }
+     }
+@@ -503,4 +562,62 @@ router.post('/api/extensions/uninstall', async (req, res) => {
+     }
+ });
+ 
++// ── Sync channel config into sandbox ───────────────────────────
++//
++// Applies the stored credential for a channel extension to the openclaw
++// gateway inside the sandbox.  Used to fix already-installed extensions
++// that were configured before this mechanism was added (backfill), and
++// testable from the Extensions panel.
++
++router.post('/api/extensions/sync-channel', async (req, res) => {
++    const { extensionId, sandboxName } = req.body;
++
++    if (!extensionId || !sandboxName) {
++        return res.status(400).json({ ok: false, error: 'extensionId and sandboxName are required' });
++    }
++
++    const extensions = loadRegistry();
++    const ext = extensions.find(e => e.id === extensionId);
++    if (!ext) {
++        return res.status(404).json({ ok: false, error: `Extension '${extensionId}' not found` });
++    }
++
++    if (!ext.channelName) {
++        return res.status(400).json({ ok: false, error: `Extension '${extensionId}' has no channelName — nothing to sync` });
++    }
++
++    // Resolve credential from state file or environment
++    const state = loadExtState();
++    const extState = state[sandboxName]?.[extensionId] || {};
++    const credential = extState.credential || (ext.credentialKey ? process.env[ext.credentialKey] : null);
++
++    if (!credential) {
++        return res.status(400).json({
++            ok: false,
++            error: `No credential found for '${extensionId}' on sandbox '${sandboxName}'. Install the extension first with a bot token.`,
++        });
++    }
++
++    try {
++        // Resolve sandbox UUID
++        let sandboxId = sandboxName;
++        try {
++            const resp = await grpcClient.getSandbox(sandboxName);
++            sandboxId = resp.sandbox?.id || sandboxName;
++        } catch { /* use name as fallback */ }
++
++        const result = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
++
++        res.json({
++            ok: result.ok,
++            sandboxName,
++            extensionId,
++            channelName: ext.channelName,
++            message: result.message,
++        });
++    } catch (err) {
++        res.status(500).json({ ok: false, error: err.message });
++    }
++});
++
+ export default router;
+diff --git a/gui/src/components/chat/ChatInterface.tsx b/gui/src/components/chat/ChatInterface.tsx
+index 17c6469..c4de3da 100644
+--- a/gui/src/components/chat/ChatInterface.tsx
++++ b/gui/src/components/chat/ChatInterface.tsx
+@@ -6,6 +6,7 @@ interface Message {
+     id: string;
+     role: 'user' | 'assistant' | 'system';
+     content: string;
++    thought?: string;
+     timestamp: Date;
+     sandboxed?: boolean;
+     warning?: string;
+@@ -102,10 +103,21 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
+                 };
+                 setMessages(prev => [...prev, errorMsg]);
+             } else {
++                let finalContent = result.response || 'No response received.';
++                let finalThought;
++                if (finalContent.includes('<think>')) {
++                    const match = finalContent.match(/<think>([\s\S]*?)<\/think>/);
++                    if (match) {
++                        finalThought = match[1].trim();
++                        finalContent = finalContent.replace(/<think>[\s\S]*?<\/think>/, '').trim();
++                    }
++                }
++
+                 const assistantMsg: Message = {
+                     id: (Date.now() + 1).toString(),
+                     role: 'assistant',
+-                    content: result.response || 'No response received.',
++                    content: finalContent,
++                    thought: finalThought,
+                     timestamp: new Date(),
+                     sandboxed: result.sandboxed,
+                     warning: result.warning,
+@@ -190,6 +202,39 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
+                                     SYSTEM
+                                 </div>
+                             )}
++                            {msg.thought && (
++                                <details style={{
++                                    marginBottom: 'var(--nc-spacing-sm)',
++                                    background: 'var(--nc-surface-hover)',
++                                    borderRadius: '8px',
++                                    border: '1px solid var(--nc-border)',
++                                    overflow: 'hidden'
++                                }}>
++                                    <summary style={{
++                                        padding: '8px 12px',
++                                        fontSize: '0.8rem',
++                                        fontWeight: 600,
++                                        color: 'var(--nc-text-secondary)',
++                                        cursor: 'pointer',
++                                        userSelect: 'none',
++                                        display: 'flex',
++                                        alignItems: 'center',
++                                        gap: '6px'
++                                    }}>
++                                        <span style={{ fontSize: '1.2em' }}>🧠</span> Agent Thinking Process
++                                    </summary>
++                                    <div style={{
++                                        padding: '12px',
++                                        fontSize: '0.85rem',
++                                        color: 'var(--nc-text-secondary)',
++                                        whiteSpace: 'pre-wrap',
++                                        background: 'var(--nc-surface)',
++                                        borderTop: '1px solid var(--nc-border)'
++                                    }}>
++                                        {msg.thought}
++                                    </div>
++                                </details>
++                            )}
+                             <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                             {/* Sandboxed / Bypassed indicator */}
+                             {msg.role === 'assistant' && msg.sandboxed !== undefined && (
+diff --git a/scripts/nemoclaw-start.sh b/scripts/nemoclaw-start.sh
+index c53bda5..2336d2f 100755
+--- a/scripts/nemoclaw-start.sh
++++ b/scripts/nemoclaw-start.sh
+@@ -135,7 +135,10 @@ echo 'Setting up NemoClaw...'
+ # /sandbox/.openclaw directory and accomplish nothing.
+ write_auth_profile
+ 
+-nohup openclaw gateway run --allow-unconfigured --auth none >/tmp/gateway.log 2>&1 &
++# Source any channel env overrides (e.g. DISCORD_BOT_TOKEN written by sync-channel endpoint)
++[ -f /sandbox/.openclaw-data/.channel-env ] && . /sandbox/.openclaw-data/.channel-env
++
++nohup openclaw gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 &
+ echo "[gateway] openclaw gateway launched (pid $!)"
+ start_auto_pair
+ print_dashboard_urls

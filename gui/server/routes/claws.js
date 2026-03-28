@@ -14,8 +14,38 @@ import {
     getGateways,
 } from '../services/clawManager.js';
 import * as grpcClient from '../lib/grpcClient.js';
+import { mapProviderToGrpcType, mapProviderToConfigKey, mapProviderToCredentialKey } from '../lib/grpcClient.js';
 
 const router = Router();
+
+const WORKSPACE_DIR = '/sandbox/.openclaw/workspace';
+const WORKSPACE_FILES = ['SOUL.md', 'IDENTITY.md', 'USER.md'];
+
+function collectExecStream(stream, timeoutSec = 30) {
+    return new Promise((resolve, reject) => {
+        const stdoutChunks = [];
+        const stderrChunks = [];
+        let exitCode = null;
+        const hardTimer = setTimeout(() => {
+            try { stream.cancel(); } catch { /* ignore */ }
+            reject(new Error('ExecSandbox timed out'));
+        }, timeoutSec * 1000);
+
+        stream.on('data', (event) => {
+            if (event.stdout?.data) stdoutChunks.push(Buffer.isBuffer(event.stdout.data) ? event.stdout.data.toString('utf-8') : String(event.stdout.data));
+            if (event.stderr?.data) stderrChunks.push(Buffer.isBuffer(event.stderr.data) ? event.stderr.data.toString('utf-8') : String(event.stderr.data));
+            if (event.exit != null) exitCode = event.exit.exitCode ?? event.exit.exit_code ?? 0;
+        });
+        stream.on('end', () => {
+            clearTimeout(hardTimer);
+            resolve({ stdout: stdoutChunks.join(''), stderr: stderrChunks.join(''), exitCode });
+        });
+        stream.on('error', (err) => {
+            clearTimeout(hardTimer);
+            reject(err);
+        });
+    });
+}
 
 // ── List all claws ────────────────────────────────────────────────
 
@@ -111,7 +141,7 @@ router.post('/api/claws', async (req, res) => {
         return;
     }
 
-    // Step 2: Create / update provider in the gateway via gRPC
+    // Step 2: Create / update provider in the gateway via gRPC (idempotent)
     try {
         sendEvent({ step: 'provider', status: 'running', message: 'Configuring inference provider...' });
         const providerType = provider || 'cloud';
@@ -120,35 +150,18 @@ router.post('/api/claws', async (req, res) => {
         const config = {};
 
         if (apiKey) {
-            const credKeyMap = {
-                'cloud': 'api_key', 'ollama': 'api_key', 'openrouter': 'api_key',
-                'gemini': 'api_key', 'vllm': 'api_key', 'nim-local': 'api_key',
-            };
-            credentials[credKeyMap[providerType] || 'api_key'] = apiKey;
+            credentials[mapProviderToCredentialKey(providerType)] = apiKey;
         }
         if (endpoint) {
-            config.base_url = endpoint;
+            config[mapProviderToConfigKey(providerType)] = endpoint;
         }
 
-        try {
-            await grpcClient.createProvider({
-                name: providerName,
-                type: providerType,
-                credentials,
-                config,
-            });
-        } catch (createErr) {
-            if (createErr.code === 6 /* ALREADY_EXISTS */) {
-                await grpcClient.updateProvider({
-                    name: providerName,
-                    type: providerType,
-                    credentials,
-                    config,
-                });
-            } else {
-                throw createErr;
-            }
-        }
+        await grpcClient.ensureProvider(
+            providerName,
+            mapProviderToGrpcType(providerType),
+            credentials,
+            config,
+        );
         sendEvent({ step: 'provider', status: 'complete', message: 'Provider configured' });
     } catch (err) {
         sendEvent({ step: 'provider', status: 'error', message: `Provider setup failed: ${err.message}` });
@@ -165,7 +178,7 @@ router.post('/api/claws', async (req, res) => {
         sendEvent({ step: 'inference', status: 'error', message: `Inference config failed: ${err.message}` });
     }
 
-    // Step 4: Create sandbox via gRPC
+    // Step 4: Create sandbox via gRPC (idempotent — handles UNIQUE constraint)
     let sandboxId = null;
     try {
         sendEvent({ step: 'sandbox', status: 'running', message: `Creating sandbox '${name}'...` });
@@ -178,7 +191,7 @@ router.post('/api/claws', async (req, res) => {
             },
             providers: [`nemoclaw-${provider || 'cloud'}`],
         };
-        const resp = await grpcClient.createSandbox(spec, name);
+        const resp = await grpcClient.ensureSandbox(spec, name);
         sandboxId = resp.sandbox?.id || '';
         sendEvent({ step: 'sandbox', status: 'complete', message: `Sandbox '${name}' created (id: ${sandboxId})` });
     } catch (err) {
@@ -350,8 +363,10 @@ router.get('/api/claws/:id/logs', async (req, res) => {
         });
 
         stream.on('end', () => {
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
+            if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+                res.end();
+            }
         });
 
         stream.on('error', (err) => {
@@ -367,6 +382,67 @@ router.get('/api/claws/:id/logs', async (req, res) => {
         res.write(`data: ${JSON.stringify({ error: err.message || 'Failed to start log stream' })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
+    }
+});
+
+// ── Workspace Files ─────────────────────────────────────────────
+
+router.get('/api/claws/:id/workspace', async (req, res) => {
+    try {
+        const claw = await getClaw(req.params.id);
+        if (!claw) return res.status(404).json({ ok: false, error: `Claw '${req.params.id}' not found` });
+
+        // Retrieve the contents of all designated workspace files
+        const catCmd = WORKSPACE_FILES.map(f => `echo "--- ${f} ---" && cat "${WORKSPACE_DIR}/${f}" 2>/dev/null || echo "(not found)"`).join(' && echo "" && ');
+        const stream = grpcClient.execSandbox(claw.sandboxName, ['bash', '-c', catCmd], { timeoutSeconds: 15 });
+        const { stdout, exitCode, stderr } = await collectExecStream(stream, 15);
+
+        if (exitCode !== 0 && exitCode !== null) {
+            console.warn(`[workspace] ExecSandbox failed: exit=${exitCode} err=${stderr}`);
+        }
+
+        const content = stdout || '';
+        const files = WORKSPACE_FILES.map(f => {
+            const marker = `--- ${f} ---`;
+            const idx = content.indexOf(marker);
+            if (idx === -1) return { name: f, content: '' };
+            const after = content.slice(idx + marker.length).split('---')[0].trim();
+            return { name: f, content: after === '(not found)' ? '' : after };
+        });
+
+        res.json({ ok: true, files });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+router.put('/api/claws/:id/workspace/:file', async (req, res) => {
+    try {
+        const file = req.params.file;
+        if (!WORKSPACE_FILES.includes(file)) {
+            return res.status(400).json({ ok: false, error: `Invalid file. Allowed: ${WORKSPACE_FILES.join(', ')}` });
+        }
+
+        const claw = await getClaw(req.params.id);
+        if (!claw) return res.status(404).json({ ok: false, error: `Claw '${req.params.id}' not found` });
+
+        const content = req.body.content || '';
+        const escapeForHeredoc = (s) => s.replace(/\\/g, '\\\\');
+
+        const writeCmd = `mkdir -p "${WORKSPACE_DIR}" && cat > "${WORKSPACE_DIR}/${file}" << 'NEMOCLAW_EOF'
+${escapeForHeredoc(content)}
+NEMOCLAW_EOF`;
+
+        const stream = grpcClient.execSandbox(claw.sandboxName, ['bash', '-c', writeCmd], { timeoutSeconds: 15 });
+        const { exitCode, stderr } = await collectExecStream(stream, 15);
+
+        if (exitCode !== 0) {
+            return res.status(500).json({ ok: false, error: `Failed to write file: code ${exitCode}, err ${stderr}` });
+        }
+
+        res.json({ ok: true, message: `Updated ${file}` });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
     }
 });
 

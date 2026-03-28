@@ -42,7 +42,7 @@ const InferenceService = protoDescriptor.openshell.inference.v1.Inference;
 // ── mTLS Credential Resolution ─────────────────────────────────
 
 const OPENSHELL_CONFIG_DIR = join(homedir(), '.config', 'openshell');
-const ACTIVE_CLUSTER_FILE = join(OPENSHELL_CONFIG_DIR, 'active_cluster');
+const ACTIVE_CLUSTER_FILE = join(OPENSHELL_CONFIG_DIR, 'active_gateway');
 
 /**
  * Resolve the active OpenShell cluster name.
@@ -63,7 +63,7 @@ function resolveActiveCluster() {
  * Load cluster metadata JSON to get the gateway endpoint URL.
  */
 function loadClusterMetadata(clusterName) {
-    const metaPath = join(OPENSHELL_CONFIG_DIR, `${clusterName}_metadata.json`);
+    const metaPath = join(OPENSHELL_CONFIG_DIR, 'gateways', clusterName, 'metadata.json');
     try {
         return JSON.parse(readFileSync(metaPath, 'utf-8'));
     } catch {
@@ -76,7 +76,7 @@ function loadClusterMetadata(clusterName) {
  * Returns { rootCert, clientCert, clientKey } or null.
  */
 function loadMtlsCerts(clusterName) {
-    const mtlsDir = join(OPENSHELL_CONFIG_DIR, 'clusters', clusterName, 'mtls');
+    const mtlsDir = join(OPENSHELL_CONFIG_DIR, 'gateways', clusterName, 'mtls');
     const caPath = join(mtlsDir, 'ca.crt');
     const certPath = join(mtlsDir, 'tls.crt');
     const keyPath = join(mtlsDir, 'tls.key');
@@ -148,9 +148,12 @@ export function getGrpcClients() {
     // Channel options — keep alive for persistent connection
     const options = {
         'grpc.keepalive_time_ms': 30000,
-        'grpc.keepalive_timeout_ms': 10000,
+        'grpc.keepalive_timeout_ms': 5000,
         'grpc.keepalive_permit_without_calls': 1,
         'grpc.max_receive_message_length': 16 * 1024 * 1024,  // 16MB
+        'grpc.initial_reconnect_backoff_ms': 500,
+        'grpc.max_reconnect_backoff_ms': 3000,
+        'grpc.dns_min_time_between_resolutions_ms': 5000,
     };
 
     _openShellClient = new OpenShellService(endpoint, credentials, options);
@@ -188,7 +191,9 @@ export function resetGrpcClients() {
 function unary(client, method, request = {}, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
         const deadline = new Date(Date.now() + timeoutMs);
-        client[method](request, { deadline }, (err, response) => {
+        // waitForReady: false → fail immediately when channel is disconnected
+        // instead of queuing calls indefinitely behind reconnection
+        client[method](request, { deadline, waitForReady: false }, (err, response) => {
             if (err) {
                 reject(err);
             } else {
@@ -196,6 +201,24 @@ function unary(client, method, request = {}, timeoutMs = 15000) {
             }
         });
     });
+}
+
+/**
+ * Race a promise against a hard timeout.
+ * Guards against gRPC deadline bugs where neither callback fires.
+ * @param {Promise} promise - The gRPC call promise.
+ * @param {number} ms - Hard timeout in milliseconds.
+ * @param {string} label - Label for timeout error message.
+ * @returns {Promise}
+ */
+export function raceWithTimeout(promise, ms, label = 'gRPC call') {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 // ── OpenShell Service Methods ───────────────────────────────────
@@ -335,13 +358,13 @@ export async function getProvider(name) {
 export async function createProvider(provider) {
     const clients = getGrpcClients();
     if (!clients) throw new Error('No gateway connection available');
-    return unary(clients.openShell, 'createProvider', { provider });
+    return unary(clients.openShell, 'createProvider', { provider }, 3000);
 }
 
 export async function updateProvider(provider) {
     const clients = getGrpcClients();
     if (!clients) throw new Error('No gateway connection available');
-    return unary(clients.openShell, 'updateProvider', { provider });
+    return unary(clients.openShell, 'updateProvider', { provider }, 3000);
 }
 
 export async function deleteProvider(name) {
@@ -466,7 +489,36 @@ export async function rejectDraftChunk(name, chunkId, reason = '') {
     return unary(clients.openShell, 'rejectDraftChunk', { name, chunkId, reason });
 }
 
+/**
+ * Get decision history for a sandbox's draft policy.
+ * Returns { entries: DraftHistoryEntry[] }.
+ */
+export async function getDraftHistory(name) {
+    const clients = getGrpcClients();
+    if (!clients) throw new Error('No gateway connection available');
+    return unary(clients.openShell, 'getDraftHistory', { name });
+}
+
 // ── Helpers ─────────────────────────────────────────────────────
+
+/**
+ * Map a NemoClaw provider key to a gateway-supported gRPC provider type.
+ * The OpenShell gateway only accepts: 'openai', 'anthropic', 'nvidia'.
+ * Most providers (OpenRouter, Gemini, Ollama, vLLM) expose an
+ * OpenAI-compatible /v1 API, so they map to 'openai'.
+ */
+const PROVIDER_TYPE_MAP = {
+    'cloud':     'nvidia',
+    'nim-local': 'nvidia',
+    'openrouter': 'openai',
+    'gemini':    'openai',
+    'ollama':    'openai',
+    'vllm':      'openai',
+};
+
+export function mapProviderToGrpcType(providerKey) {
+    return PROVIDER_TYPE_MAP[providerKey] || 'openai';
+}
 
 /** Map SandboxPhase proto enum to human-readable status. */
 export function mapPhaseToStatus(phase) {

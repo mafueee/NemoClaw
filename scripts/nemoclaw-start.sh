@@ -135,11 +135,14 @@ echo 'Setting up NemoClaw...'
 # /sandbox/.openclaw directory and accomplish nothing.
 write_auth_profile
 
-if [ ${#NEMOCLAW_CMD[@]} -gt 0 ]; then
-  exec "${NEMOCLAW_CMD[@]}"
-fi
+# Source any channel env overrides (e.g. DISCORD_BOT_TOKEN written by sync-channel endpoint)
+[ -f /sandbox/.openclaw-data/.channel-env ] && . /sandbox/.openclaw-data/.channel-env
 
-nohup openclaw gateway run >/tmp/gateway.log 2>&1 &
+nohup openclaw gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 &
 echo "[gateway] openclaw gateway launched (pid $!)"
 start_auto_pair
 print_dashboard_urls
+
+if [ ${#NEMOCLAW_CMD[@]} -gt 0 ]; then
+  exec "${NEMOCLAW_CMD[@]}"
+fi

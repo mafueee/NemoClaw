@@ -8,7 +8,7 @@ import { pathToFileURL } from 'url';
 // Dynamic import using absolute path to avoid ESM resolution issues from test/ dir
 const grpcClientPath = join(process.cwd(), 'gui', 'server', 'lib', 'grpcClient.js');
 const mod = await import(pathToFileURL(grpcClientPath).href);
-const { mapPhaseToStatus, sandboxToDto } = mod;
+const { mapPhaseToStatus, sandboxToDto, mapProviderToGrpcType } = mod;
 
 describe('grpcClient', () => {
     describe('mapPhaseToStatus', () => {
@@ -137,6 +137,36 @@ describe('grpcClient', () => {
 
         it('exports createSshSession as a function', () => {
             expect(typeof mod.createSshSession).toBe('function');
+        });
+    });
+
+    describe('mapProviderToGrpcType', () => {
+        it('maps NVIDIA cloud to nvidia', () => {
+            expect(mapProviderToGrpcType('cloud')).toBe('nvidia');
+        });
+
+        it('maps NIM local to nvidia', () => {
+            expect(mapProviderToGrpcType('nim-local')).toBe('nvidia');
+        });
+
+        it('maps OpenRouter to openai', () => {
+            expect(mapProviderToGrpcType('openrouter')).toBe('openai');
+        });
+
+        it('maps Gemini to openai', () => {
+            expect(mapProviderToGrpcType('gemini')).toBe('openai');
+        });
+
+        it('maps Ollama to openai', () => {
+            expect(mapProviderToGrpcType('ollama')).toBe('openai');
+        });
+
+        it('maps vLLM to openai', () => {
+            expect(mapProviderToGrpcType('vllm')).toBe('openai');
+        });
+
+        it('defaults unknown providers to openai', () => {
+            expect(mapProviderToGrpcType('some-custom-provider')).toBe('openai');
         });
     });
 });
