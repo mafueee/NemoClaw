@@ -1,0 +1,28 @@
+services:
+  nemoclaw-gui:
+    build:
+      context: .
+      dockerfile: gui/Dockerfile
+    container_name: nemoclaw-gui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount CLI orchestration layer (read-only)
+      - ./bin:/app/bin:ro
+      - ./nemoclaw-blueprint:/app/nemoclaw-blueprint:ro
+      - ./scripts:/app/scripts:ro
+      # Mount credentials and registry (read-write)
+      - ~/.nemoclaw:/root/.nemoclaw
+      # Mount Docker socket so OpenShell can manage containers
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GUI_PORT=3000
+      - NODE_ENV=production
+      - HOME=/root
+    networks:
+      - nemoclaw
+
+networks:
+  nemoclaw:
+    driver: bridge

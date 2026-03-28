@@ -208,6 +208,172 @@ OpenShell is developed using the same agent-driven workflows it enables. The `.a
 
 All implementation work is human-gated — agents propose plans, humans approve, agents build. See [AGENTS.md](AGENTS.md) for the full workflow chain documentation.
 
+## NemoClaw Blueprint
+
+This repository includes the **NemoClaw Blueprint** — the orchestration layer that configures OpenClaw agents inside OpenShell sandboxes with pre-built policy presets for popular integrations.
+
+### GUI Dashboard
+
+NemoClaw includes a full web-based dashboard that provides visual access to every CLI function. The dashboard runs as a Docker container and connects to the same `bin/lib` orchestration layer used by the CLI.
+
+**Quick Start:**
+
+```bash
+# Start the dashboard (Docker)
+docker compose up --build -d
+
+# Or start directly with Node.js
+cd gui && npm install && npm start
+```
+
+The dashboard is accessible at `http://localhost:3000` (or your LAN IP).
+
+**Dashboard Pages:**
+
+| Page | URL | Description |
+| --- | --- | --- |
+| Dashboard | `#/` | Sandbox card grid with live status, system health stats |
+| Onboard | `#/onboard` | 5-step wizard: preflight → provider → credentials → model → create |
+| Sandbox Detail | `#/sandbox/:name` | Status, logs, policy, workspace tabs for a single sandbox |
+| Policies | `#/policies` | Toggle preset grid, baseline viewer, merge preview, validation |
+| Inference | `#/inference` | Provider catalogue, credential vault, switch active provider |
+| Workspace | `#/workspace` | Edit SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md |
+| Monitoring | `#/monitoring` | Live log streaming, network activity, operator approval queue |
+| Deploy | `#/deploy` | Remote GPU deployment, Telegram bridge configuration |
+
+**REST API:**
+
+All GUI functions are also available as REST endpoints:
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/api/sandboxes` | GET | List all registered sandboxes |
+| `/api/sandboxes` | POST | Create a new sandbox |
+| `/api/sandboxes/:name` | GET | Sandbox detail with live status |
+| `/api/sandboxes/:name` | DELETE | Destroy a sandbox |
+| `/api/sandboxes/:name/logs` | GET (SSE) | Real-time log streaming |
+| `/api/policies/presets` | GET | List available policy presets |
+| `/api/policies/apply` | POST | Apply presets to a sandbox |
+| `/api/policies/baseline` | GET | Get full baseline policy |
+| `/api/policies/validate` | POST | Validate all policy files |
+| `/api/inference/providers` | GET | Provider catalogue |
+| `/api/inference/switch` | POST | Switch active inference provider |
+| `/api/inference/credentials` | GET/POST | Manage credential vault |
+| `/api/workspace/:sandbox/files` | GET | List workspace files |
+| `/api/workspace/:sandbox/backup` | POST | Create workspace backup |
+| `/api/system/preflight` | GET | Docker, OpenShell, port checks |
+| `/api/system/health` | GET | System health status |
+
+The `nemoclaw` CLI is the primary user-facing tool for sandbox lifecycle management.
+
+```bash
+# Onboard a new sandbox (interactive wizard)
+nemoclaw onboard
+
+# List registered sandboxes
+nemoclaw list
+
+# Connect to a sandbox
+nemoclaw my-assistant connect
+
+# Show sandbox status (supports --json for machine-readable output)
+nemoclaw my-assistant status
+nemoclaw my-assistant status --json
+
+# Stream sandbox logs
+nemoclaw my-assistant logs --follow
+
+# Add policy presets to a running sandbox
+nemoclaw my-assistant policy-add discord telegram
+
+# List active and available policies
+nemoclaw my-assistant policy-list
+
+# Destroy a sandbox
+nemoclaw my-assistant destroy
+
+# Deploy to a remote GPU instance
+nemoclaw deploy my-gpu-box
+```
+
+### Onboarding
+
+The `nemoclaw onboard` wizard walks through:
+1. **Preflight checks** — Docker, OpenShell CLI, port availability
+2. **Provider selection** — NVIDIA, OpenAI, Anthropic, Gemini, Ollama, or custom endpoint
+3. **Credential validation** — test API key against provider endpoint
+4. **Model selection** — pick or accept the default model
+5. **Sandbox creation** — create sandbox, apply baseline policy, configure inference route
+
+### Policy Presets
+
+Policy presets are curated network policies for common services. They define exactly which hosts, ports, HTTP methods, and URL paths are allowed — no more, no less.
+
+| Preset | Description | Key Configuration |
+| --- | --- | --- |
+| `discord` | Discord API, gateway, CDN | WebSocket gateway uses CONNECT tunnel (`access: full`) |
+| `telegram` | Telegram Bot API | REST with bot-scoped path rules |
+| `slack` | Slack API, Socket Mode, webhooks | Socket Mode uses CONNECT tunnel |
+| `docker` | Docker Hub, NVIDIA registry | Registry auth + pull/push |
+| `pypi` | Python Package Index | Full access for pip/uv |
+| `npm` | npm and Yarn registries | Full access for node tooling |
+| `jira` | Jira and Atlassian Cloud | REST API + auth |
+| `outlook` | Microsoft Graph + Outlook | Graph API + OAuth |
+| `huggingface` | Hugging Face Hub, LFS, Inference | Hub + CDN + inference API |
+
+### Managing Policies
+
+```bash
+# Via nemoclaw CLI (recommended)
+nemoclaw my-assistant policy-add discord telegram
+nemoclaw my-assistant policy-list
+
+# Via manage-policies.js (advanced)
+node bin/manage-policies.js list
+node bin/manage-policies.js show discord
+node bin/manage-policies.js validate
+node bin/manage-policies.js merge discord slack
+node bin/manage-policies.js apply <sandbox-name> discord telegram
+```
+
+### Workspace Backup & Restore
+
+Workspace files (SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md) persist across sandbox restarts but are permanently deleted when you run `nemoclaw <name> destroy`. Use the backup script to save and restore workspace state:
+
+```bash
+# Backup workspace
+./scripts/backup-workspace.sh backup my-assistant
+
+# Restore from most recent backup
+./scripts/backup-workspace.sh restore my-assistant
+
+# Restore from a specific timestamp
+./scripts/backup-workspace.sh restore my-assistant 20260320-120000
+
+# List available backups
+./scripts/backup-workspace.sh list
+```
+
+Backups are saved to `~/.nemoclaw/backups/<sandbox>/<timestamp>/`.
+
+### Interactive Walkthrough
+
+Launch a split tmux session to see the sandbox and policy enforcement in action:
+
+```bash
+./scripts/walkthrough.sh my-assistant
+```
+
+This opens the OpenShell TUI (monitoring) on the left and an agent session on the right, demonstrating deny-by-default policy enforcement and operator approval flows.
+
+### Policy Files
+
+- **Baseline policy:** `nemoclaw-blueprint/policies/openclaw-sandbox.yaml` — deny-all with pre-approved endpoint groups
+- **Presets:** `nemoclaw-blueprint/policies/presets/*.yaml` — per-integration additive policies
+- **Blueprint:** `nemoclaw-blueprint/blueprint.yaml` — sandbox image, inference profiles, policy base
+
+> **WebSocket Note:** Services that use WebSocket connections (Discord gateway, Slack Socket Mode) must use `access: full` (CONNECT tunnel) instead of `protocol: rest`. The proxy's HTTP idle timeout (~2 min) kills long-lived WebSocket connections; a CONNECT tunnel bypasses HTTP-level timeouts entirely.
+
 ## Getting Help
 
 - **Questions and discussion:** [GitHub Discussions](https://github.com/NVIDIA/OpenShell/discussions)

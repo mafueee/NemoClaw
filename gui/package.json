@@ -1,0 +1,16 @@
+{
+  "name": "nemoclaw-gui",
+  "version": "1.0.0",
+  "description": "NemoClaw Dashboard — GUI for sandbox lifecycle, policy management, and inference routing",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "yaml": "^2.8.3"
+  }
+}

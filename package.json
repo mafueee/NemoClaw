@@ -1,0 +1,34 @@
+{
+  "name": "openshell",
+  "version": "1.0.0",
+  "description": "[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](https://github.com/NVIDIA/OpenShell/blob/main/LICENSE) [![PyPI](https://img.shields.io/badge/PyPI-openshell-orange?logo=pypi)](https://pypi.org/project/openshell/) [![Security Policy](https://img.shields.io/badge/Security-Report%20a%20Vulnerability-red)](SECURITY.md) [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen)](https://docs.nvidia.com/openshell/latest/index.html) [![Project Status](https://img.shields.io/badge/status-alpha-orange)](https://docs.nvidia.com/openshell/latest/about/release-notes.html)",
+  "main": "index.js",
+  "bin": {
+    "openshell": "bin/manage-policies.js",
+    "nemoclaw": "bin/nemoclaw.js"
+  },
+  "directories": {
+    "doc": "docs",
+    "example": "examples"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "gui:dev": "cd gui && npm install && node server/index.js",
+    "gui:start": "node gui/server/index.js",
+    "gui:docker": "docker compose up --build -d"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NVIDIA/OpenShell.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/NVIDIA/OpenShell/issues"
+  },
+  "homepage": "https://github.com/NVIDIA/OpenShell#readme",
+  "dependencies": {
+    "yaml": "^2.8.3"
+  }
+}
