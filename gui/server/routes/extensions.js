@@ -128,10 +128,9 @@ function collectExecResult(stream) {
  * Strategy:
  *  1. Use Python (with the token passed as argv[1] to avoid all shell escaping)
  *     to write a persistent env file to the writable /sandbox/.openclaw-data volume.
- *  2. Restart the openclaw gateway daemon with the token explicitly in its env
- *     using 'env KEY=VALUE' so it persists in the daemon's process environment.
- *  3. Use the gRPC UpdateConfig call to inject the env var directly into the sandbox
- *     environment — this is an additional belt-and-suspenders approach.
+ *  2. Use the gRPC UpdateConfig call to inject the env var directly into the sandbox
+ *     environment — this is the same approach used for inference provider credentials
+ *     and is far more reliable than trying to restart the openclaw daemon.
  *
  * The `openclaw doctor --fix` approach was removed because `openclaw` is often not
  * in the ExecSandbox PATH, causing a silent no-op that is indistinguishable from
@@ -142,7 +141,7 @@ function collectExecResult(stream) {
  * @param {string} token      - bot token to inject
  * @returns {Promise<{ok: boolean, message: string}>}
  */
-async function configureChannelInSandbox(sandboxId, channelKey, token) {
+async function configureChannelInSandbox(sandboxId, sandboxName, channelKey, token) {
     // Map channel key to its env var name (openclaw env fallback convention)
     const envVarMap = {
         discord: 'DISCORD_BOT_TOKEN',
@@ -154,7 +153,7 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
     // Step 1: Write a persistent env file inside the sandbox data volume.
     // Token is passed as argv[1] to Python to bypass all shell quoting hazards.
     const pyScript = [
-        'import os, sys, json',
+        'import os, sys, json, shutil',
         "env_dir = '/sandbox/.openclaw-data'",
         'os.makedirs(env_dir, exist_ok=True)',
         "env_file = os.path.join(env_dir, '.channel-env')",
@@ -163,15 +162,25 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
         `    f.write("export ${envVar}=" + repr(tok) + "\\n")`,
         'os.chmod(env_file, 0o600)',
         '',
-        '# Directly enable the channel in openclaw.json to bypass doctor CLI bugs',
-        "config_file = '/sandbox/.openclaw/openclaw.json'",
-        'if os.path.exists(config_file):',
+        '# Clone read-only openclaw.json to a writable volume so doctor can fix it',
+        "orig_config = '/sandbox/.openclaw/openclaw.json'",
+        "writable_config = os.path.join(env_dir, 'openclaw.json')",
+        'if os.path.exists(orig_config):',
         '    try:',
-        '        with open(config_file, "r") as f: data = json.load(f)',
+        '        with open(orig_config, "r") as f: data = json.load(f)',
+        '        ',
+        '        # Ensure channel is explicitly enabled in config',
+        `        ch = "${channelKey}"`,
         '        if "channels" not in data: data["channels"] = {}',
-        '        if "defaults" not in data["channels"]: data["channels"]["defaults"] = {}',
-        `        data["channels"]["defaults"]["${channelKey}"] = True`,
-        '        with open(config_file, "w") as f: json.dump(data, f, indent=2)',
+        '        if ch not in data["channels"]: data["channels"][ch] = {}',
+        '        data["channels"][ch]["enabled"] = True',
+        '        ',
+        '        # Ensure plugin is explicitly enabled without destroying other plugins',
+        '        if "plugins" not in data or not isinstance(data["plugins"], dict): data["plugins"] = {"entries": {}}',
+        '        if "entries" not in data["plugins"]: data["plugins"]["entries"] = {}',
+        '        data["plugins"]["entries"][f"@openclaw/{ch}"] = {"enabled": True}',
+        '        ',
+        '        with open(writable_config, "w") as f: json.dump(data, f, indent=2)',
         '    except Exception as e: print("Config warning:", e)',
         '',
         'print("ENV_WRITTEN")',
@@ -199,15 +208,15 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
         // so it survives in the daemon's env regardless of sourcing.
         const restartCmd = [
             // Source the env file so this shell has the token
-            '. /sandbox/.openclaw-data/.channel-env 2>/dev/null || true',
-            // Kill any existing gateway
-            'pkill -f "openclaw gateway" 2>/dev/null || pkill -f "nemoclaw-gateway" 2>/dev/null || true',
+            '[ -f /sandbox/.openclaw-data/.channel-env ] && . /sandbox/.openclaw-data/.channel-env || true',
+            // Kill any existing gateway, accounting for process name truncation
+            'pkill -f "gateway run" 2>/dev/null || pkill -f "openclaw-gatewa" 2>/dev/null || pkill -f "openclaw gateway" 2>/dev/null || true',
             'sleep 1',
             // Find the openclaw binary wherever it lives
             'OPENCLAW_BIN=$(which openclaw 2>/dev/null || ls /usr/local/bin/openclaw /usr/bin/openclaw /root/.local/bin/openclaw /home/user/.local/bin/openclaw 2>/dev/null | head -1)',
             // Start the gateway with the token explicitly in its env using the `env` trick
             // nohup ensures it keeps running after this shell exits
-            `[ -n "$OPENCLAW_BIN" ] && nohup env ${envVar}=$${envVar} "$OPENCLAW_BIN" gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 & echo "GATEWAY_STARTED:$!" || echo "GATEWAY_BIN_NOT_FOUND"`,
+            `[ -n "$OPENCLAW_BIN" ] && export OPENCLAW_CONFIG_PATH=/sandbox/.openclaw-data/openclaw.json && export ${envVar}=$${envVar} && nohup "$OPENCLAW_BIN" gateway run --allow-unconfigured --auth none > /tmp/gateway.log 2>&1 & echo "GATEWAY_STARTED:$!" || echo "GATEWAY_BIN_NOT_FOUND"`,
         ].join('; ');
 
         const restartStream = grpcClient.execSandbox(sandboxId, [
@@ -234,11 +243,11 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
     // updateConfig uses settingKey/settingValue to set sandbox-scoped settings.
     try {
         if (typeof grpcClient.updateConfig === 'function') {
-            await grpcClient.updateConfig(sandboxId, {
+            await grpcClient.updateConfig(sandboxName, {
                 settingKey: envVar,
                 settingValue: { stringValue: token },
             });
-            await grpcClient.updateConfig(sandboxId, {
+            await grpcClient.updateConfig(sandboxName, {
                 settingKey: `channels.defaults.${channelKey}`,
                 settingValue: { boolValue: true },
             });
@@ -399,7 +408,7 @@ router.post('/api/extensions/install', async (req, res) => {
                 sandboxId = resp.sandbox?.id || sandboxName;
             } catch { /* fall back to name */ }
 
-            const cfgResult = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
+            const cfgResult = await configureChannelInSandbox(sandboxId, sandboxName, ext.channelName, credential);
             steps.push({
                 step: 'channel',
                 status: cfgResult.ok ? 'complete' : 'warning',
@@ -651,7 +660,7 @@ router.post('/api/extensions/sync-channel', async (req, res) => {
             sandboxId = resp.sandbox?.id || sandboxName;
         } catch { /* use name as fallback */ }
 
-        const result = await configureChannelInSandbox(sandboxId, ext.channelName, credential);
+        const result = await configureChannelInSandbox(sandboxId, sandboxName, ext.channelName, credential);
 
         res.json({
             ok: result.ok,
