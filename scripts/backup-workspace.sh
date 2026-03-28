@@ -1,134 +1,245 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Workspace backup and restore for NemoClaw sandboxes.
+# Uses `openshell sandbox download/upload` to transfer workspace files.
 
 set -euo pipefail
 
-WORKSPACE_PATH="/sandbox/.openclaw/workspace"
 BACKUP_BASE="${HOME}/.nemoclaw/backups"
-FILES=(SOUL.md USER.md IDENTITY.md AGENTS.md MEMORY.md)
-DIRS=(memory)
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+WORKSPACE_FILES=(
+  "SOUL.md"
+  "USER.md"
+  "IDENTITY.md"
+  "AGENTS.md"
+  "MEMORY.md"
+)
+WORKSPACE_DIRS=(
+  "memory/"
+)
 
-info() { echo -e "${GREEN}[backup]${NC} $1"; }
-warn() { echo -e "${YELLOW}[backup]${NC} $1"; }
-fail() {
-  echo -e "${RED}[backup]${NC} $1" >&2
-  exit 1
-}
+WORKSPACE_ROOT="/sandbox/.openclaw/workspace"
 
 usage() {
-  cat <<EOF
+  cat <<'EOF'
+NemoClaw Workspace Backup & Restore
+
 Usage:
-  $(basename "$0") backup  <sandbox-name>
-  $(basename "$0") restore <sandbox-name> [timestamp]
+  backup-workspace.sh backup <sandbox>                 Backup workspace files
+  backup-workspace.sh restore <sandbox> [timestamp]    Restore from backup
+  backup-workspace.sh list [sandbox]                   List available backups
+  backup-workspace.sh --help                           Show this help
 
-Commands:
-  backup   Download workspace files from a sandbox to a timestamped local backup.
-  restore  Upload workspace files from a local backup into a sandbox.
-           If no timestamp is given, the most recent backup is used.
+Files backed up:
+  SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, memory/
 
-Backup location: ${BACKUP_BASE}/<timestamp>/
+Backups are saved to: ~/.nemoclaw/backups/<sandbox>/<timestamp>/
 EOF
-  exit 1
+}
+
+info() { echo "==> $*"; }
+warn() { echo "Warning: $*" >&2; }
+err()  { echo "Error: $*" >&2; }
+
+check_openshell() {
+  if ! command -v openshell &>/dev/null; then
+    err "OpenShell CLI not found. Install it and ensure it's on your PATH."
+    exit 1
+  fi
+}
+
+check_sandbox() {
+  local sandbox="$1"
+  if ! openshell sandbox list 2>/dev/null | grep -q "$sandbox"; then
+    warn "Sandbox '$sandbox' may not be running. Proceeding anyway."
+  fi
 }
 
 do_backup() {
-  local sandbox="$1"
-  local ts
-  ts="$(date +%Y%m%d-%H%M%S)"
-  local dest="${BACKUP_BASE}/${ts}"
+  local sandbox="${1:?Sandbox name required}"
+  local timestamp
+  timestamp="$(date +%Y%m%d-%H%M%S)"
+  local backup_dir="${BACKUP_BASE}/${sandbox}/${timestamp}"
 
-  mkdir -p "$BACKUP_BASE"
-  chmod 0700 "${HOME}/.nemoclaw" "$BACKUP_BASE" \
-    || fail "Failed to set secure permissions on ${HOME}/.nemoclaw — check directory ownership."
-  mkdir -p "$dest"
-  chmod 0700 "$dest"
+  check_openshell
+  check_sandbox "$sandbox"
 
-  info "Backing up workspace from sandbox '${sandbox}'..."
+  info "Backing up workspace from sandbox '$sandbox'..."
+  mkdir -p "$backup_dir"
 
   local count=0
-  for f in "${FILES[@]}"; do
-    if openshell sandbox download "$sandbox" "${WORKSPACE_PATH}/${f}" "${dest}/"; then
+
+  for file in "${WORKSPACE_FILES[@]}"; do
+    local src="${WORKSPACE_ROOT}/${file}"
+    info "  Downloading ${file}..."
+    if openshell sandbox download "$sandbox" "$src" "${backup_dir}/" 2>/dev/null; then
       count=$((count + 1))
     else
-      warn "Skipped ${f} (not found or download failed)"
+      warn "  Could not download ${file} (may not exist yet)"
     fi
   done
 
-  for d in "${DIRS[@]}"; do
-    if openshell sandbox download "$sandbox" "${WORKSPACE_PATH}/${d}/" "${dest}/${d}/"; then
+  for dir in "${WORKSPACE_DIRS[@]}"; do
+    local src="${WORKSPACE_ROOT}/${dir}"
+    local dest="${backup_dir}/${dir}"
+    info "  Downloading ${dir}..."
+    mkdir -p "$dest"
+    if openshell sandbox download "$sandbox" "$src" "$dest" 2>/dev/null; then
       count=$((count + 1))
     else
-      warn "Skipped ${d}/ (not found or download failed)"
+      warn "  Could not download ${dir} (may not exist yet)"
     fi
   done
 
-  if [ "$count" -eq 0 ]; then
-    fail "No files were backed up. Check that the sandbox '${sandbox}' exists and has workspace files."
+  echo ""
+  if [[ $count -gt 0 ]]; then
+    info "Backup saved to ${backup_dir} (${count} items)"
+    echo ""
+    ls -la "$backup_dir"
+  else
+    err "No files were backed up. Is the sandbox running?"
+    rmdir "$backup_dir" 2>/dev/null || true
+    exit 1
   fi
-
-  info "Backup saved to ${dest}/ (${count} items)"
 }
 
 do_restore() {
-  local sandbox="$1"
-  local ts="${2:-}"
+  local sandbox="${1:?Sandbox name required}"
+  local timestamp="${2:-}"
 
-  if [ -z "$ts" ]; then
-    ts="$(ls -1 "$BACKUP_BASE" 2>/dev/null | sort -r | head -n1)"
-    [ -n "$ts" ] || fail "No backups found in ${BACKUP_BASE}/"
-    info "Using most recent backup: ${ts}"
+  check_openshell
+  check_sandbox "$sandbox"
+
+  local sandbox_backups="${BACKUP_BASE}/${sandbox}"
+
+  if [[ ! -d "$sandbox_backups" ]]; then
+    err "No backups found for sandbox '$sandbox'"
+    exit 1
   fi
 
-  local src="${BACKUP_BASE}/${ts}"
-  [ -d "$src" ] || fail "Backup directory not found: ${src}"
+  if [[ -z "$timestamp" ]]; then
+    timestamp="$(ls -1 "$sandbox_backups" | sort -r | head -1)"
+    if [[ -z "$timestamp" ]]; then
+      err "No backup timestamps found for '$sandbox'"
+      exit 1
+    fi
+    info "Using most recent backup: ${timestamp}"
+  fi
 
-  info "Restoring workspace to sandbox '${sandbox}' from ${src}..."
+  local backup_dir="${sandbox_backups}/${timestamp}"
+  if [[ ! -d "$backup_dir" ]]; then
+    err "Backup directory not found: ${backup_dir}"
+    echo "Available backups:"
+    ls -1 "$sandbox_backups" 2>/dev/null || echo "  (none)"
+    exit 1
+  fi
+
+  info "Restoring workspace to sandbox '$sandbox' from ${timestamp}..."
 
   local count=0
-  for f in "${FILES[@]}"; do
-    if [ -f "${src}/${f}" ]; then
-      if openshell sandbox upload "$sandbox" "${src}/${f}" "${WORKSPACE_PATH}/"; then
+
+  for file in "${WORKSPACE_FILES[@]}"; do
+    local src="${backup_dir}/${file}"
+    if [[ -f "$src" ]]; then
+      info "  Uploading ${file}..."
+      if openshell sandbox upload "$sandbox" "$src" "${WORKSPACE_ROOT}/"; then
         count=$((count + 1))
       else
-        warn "Failed to restore ${f}"
+        warn "  Failed to upload ${file}"
       fi
     fi
   done
 
-  for d in "${DIRS[@]}"; do
-    if [ -d "${src}/${d}" ]; then
-      if openshell sandbox upload "$sandbox" "${src}/${d}/" "${WORKSPACE_PATH}/${d}/"; then
+  for dir in "${WORKSPACE_DIRS[@]}"; do
+    local src="${backup_dir}/${dir}"
+    if [[ -d "$src" ]]; then
+      info "  Uploading ${dir}..."
+      if openshell sandbox upload "$sandbox" "$src" "${WORKSPACE_ROOT}/${dir}"; then
         count=$((count + 1))
       else
-        warn "Failed to restore ${d}/"
+        warn "  Failed to upload ${dir}"
       fi
     fi
   done
 
-  if [ "$count" -eq 0 ]; then
-    fail "No files were restored. Check that the sandbox '${sandbox}' is running."
+  echo ""
+  if [[ $count -gt 0 ]]; then
+    info "Restored ${count} items to sandbox '$sandbox'"
+  else
+    err "No files were restored."
+    exit 1
   fi
-
-  info "Restored ${count} items to sandbox '${sandbox}'."
 }
 
-# --- Main ---
+do_list() {
+  local sandbox="${1:-}"
 
-[ $# -ge 2 ] || usage
-command -v openshell >/dev/null 2>&1 || fail "'openshell' is required but not found in PATH."
+  if [[ ! -d "$BACKUP_BASE" ]]; then
+    echo "No backups found at ${BACKUP_BASE}"
+    return
+  fi
 
-action="$1"
-sandbox="$2"
-shift 2
+  if [[ -n "$sandbox" ]]; then
+    local sandbox_dir="${BACKUP_BASE}/${sandbox}"
+    if [[ ! -d "$sandbox_dir" ]]; then
+      echo "No backups for sandbox '$sandbox'"
+      return
+    fi
+    echo ""
+    echo "Backups for '${sandbox}':"
+    echo "---------------------------------------------"
+    for ts in $(ls -1 "$sandbox_dir" | sort -r); do
+      local file_count
+      file_count=$(find "${sandbox_dir}/${ts}" -type f | wc -l)
+      echo "  ${ts}  (${file_count} files)"
+    done
+    echo ""
+  else
+    echo ""
+    echo "Available backups:"
+    echo "---------------------------------------------"
+    for sb_dir in "$BACKUP_BASE"/*/; do
+      if [[ -d "$sb_dir" ]]; then
+        local sb_name
+        sb_name="$(basename "$sb_dir")"
+        local backup_count
+        backup_count=$(ls -1 "$sb_dir" 2>/dev/null | wc -l)
+        local latest
+        latest="$(ls -1 "$sb_dir" | sort -r | head -1)"
+        echo "  ${sb_name}: ${backup_count} backup(s), latest: ${latest:-n/a}"
+      fi
+    done
+    echo ""
+  fi
+}
 
-case "$action" in
-  backup) do_backup "$sandbox" ;;
-  restore) do_restore "$sandbox" "$@" ;;
-  *) usage ;;
-esac
+main() {
+  if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    usage
+    exit 0
+  fi
+
+  local command="$1"
+  shift
+
+  case "$command" in
+    backup)
+      do_backup "$@"
+      ;;
+    restore)
+      do_restore "$@"
+      ;;
+    list)
+      do_list "$@"
+      ;;
+    *)
+      err "Unknown command: ${command}"
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
