@@ -237,9 +237,10 @@ NemoClaw includes a built-in **Extensions Catalog** for installing integrations 
    - Prompt for credentials if required (optional — can be skipped)
    - Securely inject the bot token into the daemon's environment and natively enable the channel via gRPC `UpdateConfig` calls — this persists across agent sessions.
    - Attempt to install packages via `ExecSandbox` — failures are reported as **advisory warnings** only; the extension is still considered installed if policy and credential steps succeed
+   - The installed extensions and their network/credential capabilities are automatically injected into the agent's system prompt via the `--system` flag during chat initialization, ensuring the model is semantically aware of its available integrations.
 5. To remove an extension, click **Uninstall** — the network policy is removed.
-
 > **After install**: The configuration is persistently managed by the backend and synced via gRPC so the channel configuration remains active across restarts. No manual reconfiguration needed.
+> **Note on Discord & Telegram**: The upstream 2026.3.11 implementation suffers from schema validation crashing the openclaw agent. This fork specifically forces a nested `entries` object injection for channels to resolve this limitation and prevent openclaw tool calling failures that plagued upstream NemoClaw.
 
 ### Syncing an Already-Installed Extension
 
@@ -296,7 +297,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
 | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with OPA rule validation. |
 | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to credential vault. |
-| **⚖️ Denial Dashboard** | AI-recommended policy changes from denial analysis. Review, approve, or reject draft policy chunks with confidence scores and decision history. |
+| **⚖️ Denial Dashboard** | AI-recommended policy changes from automated denial analysis. Review, approve, or reject draft policy chunks with confidence scores and decision history. |
 | **🛡️ Exec Approvals** | Real-time approve/deny queue for agent network/exec requests. Connects via WebSocket proxy to the OpenClaw gateway for live push notifications. |
 | **⚡ Skills** | View all installed agent tools/skills with version, category, and requirements status. Click any skill to inspect its full configuration. |
 | **🧩 Plugins** | Install (npm/path), enable/disable, and remove plugin packages from running sandboxes. |
@@ -517,6 +518,7 @@ We've extended the original into a full management platform by:
 - Implementing an **extensions catalog** for installing integrations (Discord, Telegram, Slack, etc.) with network policies, credentials, and in-sandbox packages
 - Implementing a **bidirectional WebSocket proxy** tunnelling the React frontend to the OpenClaw gateway daemon via gRPC `ExecSandbox` stdin/stdout for real-time agent tool-use approvals
 - Building **feature parity** with the upstream NemoClaw reference implementation: exec approvals, skills viewer, plugin manager, memory search, and cron scheduler — all backed by the sandboxed OpenClaw gateway API
+- **Resolving upstream OpenClaw 2026.3.11 bugs** with strict configuration schema validation, bypassing buggy CLI operations to explicitly inject Discord and other extension properties correctly into the agent runtime configuration.
 
 The core sandbox security model — Landlock, seccomp, network namespace isolation, and policy-enforced egress — remains as NVIDIA designed it.
 
