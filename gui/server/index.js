@@ -1,38 +1,117 @@
-// NemoClaw Dashboard — Express API Server
-// All sandbox/gateway operations use native gRPC and HTTP — no CLI subprocess calls.
+const express = require('express');
+const { createServer } = require('http');
+const { join } = require('path');
+const { readFileSync } = require('fs');
+const grpcClient = require('./lib/grpcClient');
+const registry = require('../bin/lib/registry');
 
-import express from 'express';
-import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
-import { createRequire } from 'module';
-import clawRoutes from './routes/claws.js';
-import { listClaws, registerClaw } from './services/clawManager.js';
-import * as grpcClient from './lib/grpcClient.js';
-import * as gatewayHealth from './lib/gatewayHealth.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const require = createRequire(import.meta.url);
+// Load settings
+const PORT = process.env.PORT || 3000;
+const NEMOCLAW_ROOT = process.env.NEMOCLAW_ROOT || join(__dirname, '../../');
+const DATA_DIR = join(NEMOCLAW_ROOT, 'data');
 
 const app = express();
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
-
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const NEMOCLAW_ROOT = process.env.NEMOCLAW_ROOT || join(__dirname, '..', '..');
-
 app.use(express.json());
 
-// Mount claw instance routes
-app.use(clawRoutes);
+const server = createServer(app);
 
-// Serve static frontend
+// ── WebSocket Proxy Implementation for ExecSandbox ───────────────
+
+const { WebSocketServer } = require('ws');
+const wss = new WebSocketServer({ noServer: true });
+
+// Attach WS upgrade handler to Express HTTP server
+server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+    
+    // Check if upgrading to a proxy route: /api/sandbox/:sandboxId/proxy
+    const match = pathname.match(/^\/api\/sandbox\/([a-zA-Z0-9._-]+)\/proxy$/);
+    if (match) {
+        const sandboxId = match[1];
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request, sandboxId);
+        });
+    } else {
+        socket.destroy();
+    }
+});
+
+// Manage active WebSocket connections
+const activeProxies = new Map();
+
+wss.on('connection', (ws, request, sandboxId) => {
+    console.log(`[ws-proxy] Client connected to sandbox ${sandboxId}`);
+
+    // If a proxy stream already exists for this sandbox, close it
+    if (activeProxies.has(sandboxId)) {
+        activeProxies.get(sandboxId).cancel();
+    }
+
+    try {
+        // Start streaming ExecSandbox as a proxy tunnel
+        // Using `bash -i` gives us a pseudo-interactive shell tunnel
+        const stream = grpcClient.execSandbox(sandboxId, ['bash', '-i'], { timeoutSeconds: 3600 });
+        activeProxies.set(sandboxId, stream);
+
+        // Send stdout/stderr down to the client terminal
+        stream.on('data', (response) => {
+            if (response.stdout) {
+                ws.send(JSON.stringify({ type: 'stdout', data: response.stdout }));
+            }
+            if (response.stderr) {
+                ws.send(JSON.stringify({ type: 'stderr', data: response.stderr }));
+            }
+        });
+
+        stream.on('end', () => {
+            console.log(`[ws-proxy] Host closed stream for ${sandboxId}`);
+            ws.close();
+            activeProxies.delete(sandboxId);
+        });
+
+        stream.on('error', (err) => {
+            console.error(`[ws-proxy] gRPC Error for ${sandboxId}:`, err.message);
+            // Ignore grpc-node cancellation errors which are expected
+            if (err.code !== 1) {
+                ws.send(JSON.stringify({ type: 'error', data: err.message }));
+            }
+        });
+
+        // Forward incoming client input (stdin) up to the sandbox
+        ws.on('message', (message) => {
+            try {
+                const msg = JSON.parse(message.toString());
+                if (msg.type === 'stdin' && msg.data) {
+                    stream.write({ stdin: msg.data });
+                } else if (msg.type === 'resize') {
+                    // ExecSandbox does not support native resize in stock OpenClaw, 
+                    // but we catch it here for future-proofing
+                    console.log(`[ws-proxy] Client resizing terminal: ${msg.cols}x${msg.rows}`);
+                }
+            } catch (err) {
+                console.warn(`[ws-proxy] Invalid message format: ${err.message}`);
+            }
+        });
+
+        ws.on('close', () => {
+            console.log(`[ws-proxy] Client disconnected from ${sandboxId}`);
+            if (activeProxies.has(sandboxId)) {
+                activeProxies.get(sandboxId).cancel();
+                activeProxies.delete(sandboxId);
+            }
+        });
+
+    } catch (err) {
+        console.error(`[ws-proxy] Failed to connect stream:`, err.message);
+        ws.close();
+    }
+});
+
+// ── Static Files (Vite Production Build) ────────────────────────
+
+// In production, Vite builds to gui/dist
 const distDir = join(__dirname, '..', 'dist');
-if (existsSync(distDir)) {
+if (process.env.NODE_ENV !== 'development') {
     app.use(express.static(distDir));
 }
 
@@ -40,1114 +119,179 @@ if (existsSync(distDir)) {
 
 // Health
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', version: '1.0.0' });
+    res.json({ ok: true, timestamp: Date.now() });
 });
 
-// ── Sandboxes — gRPC native ─────────────────────────────────────
+// Import the modular routing
+const sandboxRouter = require('./routes/sandbox');
+const extensionsRouter = require('./routes/extensions');
+const telemetryRouter = require('./routes/telemetry'); // Cron/Task scheduling endpoint
 
-app.get('/api/sandboxes', async (req, res) => {
-    try {
-        const resp = await grpcClient.listSandboxes();
-        const sandboxes = (resp.sandboxes || []).map(grpcClient.sandboxToDto);
-        res.json({ sandboxes, source: 'grpc' });
-    } catch (err) {
-        res.status(502).json({ sandboxes: [], error: err.message, source: 'grpc' });
-    }
-});
+app.use(sandboxRouter);
+app.use(extensionsRouter);
+app.use(telemetryRouter);
 
-app.get('/api/sandboxes/:name/status', async (req, res) => {
-    const { name } = req.params;
-    try {
-        const resp = await grpcClient.getSandbox(name);
-        const dto = grpcClient.sandboxToDto(resp.sandbox);
-        res.json({ name, ok: true, ...dto, source: 'grpc' });
-    } catch (err) {
-        res.status(502).json({ name, ok: false, error: err.message, source: 'grpc' });
-    }
-});
 
-app.post('/api/sandboxes/:name/destroy', async (req, res) => {
-    const { name } = req.params;
-    if (!name || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
-        return res.status(400).json({ ok: false, error: 'Invalid sandbox name' });
-    }
-    try {
-        await grpcClient.deleteSandbox(name);
-        res.json({ ok: true, message: `Sandbox '${name}' destroyed` });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-// ── Gateway — health check via gRPC/HTTP ────────────────────────
-
-app.get('/api/gateway/status', async (req, res) => {
-    try {
-        const health = await gatewayHealth.checkHealth();
-        res.json({
-            healthy: health.healthy,
-            version: health.version || '',
-            method: health.method || '',
-            endpoint: health.endpoint || '',
-            clusterName: health.clusterName || '',
-            configured: gatewayHealth.isGatewayConfigured(),
-            source: 'native',
-        });
-    } catch (err) {
-        res.status(502).json({ healthy: false, error: err.message, source: 'native' });
-    }
-});
-
-// ── Provider CRUD ───────────────────────────────────────────────
-
-app.get('/api/providers', async (req, res) => {
-    try {
-        const resp = await grpcClient.listProviders();
-        res.json({ ok: true, providers: resp.providers || [] });
-    } catch (err) {
-        res.status(502).json({ ok: false, error: err.message, providers: [] });
-    }
-});
-
-app.get('/api/providers/:name', async (req, res) => {
-    try {
-        const resp = await grpcClient.getProvider(req.params.name);
-        res.json({ ok: true, provider: resp.provider });
-    } catch (err) {
-        res.status(err.code === 5 ? 404 : 502).json({ ok: false, error: err.message });
-    }
-});
-
-app.post('/api/providers', async (req, res) => {
-    try {
-        const resp = await grpcClient.createProvider(req.body);
-        res.json({ ok: true, provider: resp.provider });
-    } catch (err) {
-        res.status(err.code === 6 ? 409 : 500).json({ ok: false, error: err.message });
-    }
-});
-
-app.put('/api/providers/:name', async (req, res) => {
-    try {
-        const provider = { ...req.body, name: req.params.name };
-        const resp = await grpcClient.updateProvider(provider);
-        res.json({ ok: true, provider: resp.provider });
-    } catch (err) {
-        res.status(err.code === 5 ? 404 : 500).json({ ok: false, error: err.message });
-    }
-});
-
-app.delete('/api/providers/:name', async (req, res) => {
-    try {
-        const resp = await grpcClient.deleteProvider(req.params.name);
-        res.json({ ok: true, deleted: resp.deleted });
-    } catch (err) {
-        res.status(err.code === 5 ? 404 : 500).json({ ok: false, error: err.message });
-    }
-});
-
-// ── Ports CRUD ──────────────────────────────────────────────────
-
-function loadPortsModule() {
-    const portsPath = join(NEMOCLAW_ROOT, 'bin', 'lib', 'ports.js');
-    const resolvedPath = require.resolve(portsPath);
-    delete require.cache[resolvedPath];
-    return require(portsPath);
-}
-
-app.get('/api/ports', async (req, res) => {
-    try {
-        const ports = loadPortsModule();
-        const allPorts = ports.getAllPorts();
-        const status = await ports.checkAllPorts();
-        const sources = ports.getPortSources();
-        res.json({ ports: allPorts, status, sources });
-    } catch (err) {
-        res.json({ ports: {}, status: [], sources: [], error: err.message });
-    }
-});
-
-app.put('/api/ports', (req, res) => {
-    try {
-        const ports = loadPortsModule();
-        const overrides = req.body;
-        if (!overrides || typeof overrides !== 'object') {
-            return res.status(400).json({ ok: false, error: 'Body must be an object of port overrides' });
-        }
-        const parsed = {};
-        for (const [key, val] of Object.entries(overrides)) {
-            parsed[key] = typeof val === 'string' ? parseInt(val, 10) : val;
-        }
-        ports.saveConfig(parsed);
-        const allPorts = ports.getAllPorts();
-        const sources = ports.getPortSources();
-        res.json({ ok: true, ports: allPorts, sources });
-    } catch (err) {
-        res.status(400).json({ ok: false, error: err.message });
-    }
-});
-
-app.post('/api/ports/reset', (req, res) => {
-    try {
-        const ports = loadPortsModule();
-        ports.resetConfig();
-        const allPorts = ports.getAllPorts();
-        const sources = ports.getPortSources();
-        res.json({ ok: true, ports: allPorts, sources });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-app.post('/api/ports/auto-resolve', async (req, res) => {
-    try {
-        const ports = loadPortsModule();
-        const resolved = await ports.resolveAllPorts({ autoResolve: true });
-        ports.saveConfig(resolved);
-        const allPorts = ports.getAllPorts();
-        const status = await ports.checkAllPorts();
-        const sources = ports.getPortSources();
-        res.json({ ok: true, ports: allPorts, status, sources });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-// ── Policies — gRPC native ──────────────────────────────────────
-
-app.get('/api/policies', (req, res) => {
-    try {
-        const presetsDir = join(NEMOCLAW_ROOT, 'nemoclaw-blueprint', 'policies', 'presets');
-        if (!existsSync(presetsDir)) {
-            return res.json({ presets: [] });
-        }
-        const { readdirSync } = require('fs');
-        const presets = readdirSync(presetsDir)
-            .filter(f => f.endsWith('.yaml'))
-            .map(f => f.replace('.yaml', ''));
-        res.json({ presets });
-    } catch (err) {
-        res.json({ presets: [], error: err.message });
-    }
-});
-
-app.get('/api/policies/presets', async (req, res) => {
-    const { sandboxName } = req.query;
-    try {
-        const policies = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js'));
-        const allPresets = policies.listPresets();
-
-        let appliedNames = [];
-        if (sandboxName) {
-            try {
-                const config = await grpcClient.getSandboxConfig(sandboxName);
-                const networkPolicies = config.policy?.networkPolicies || {};
-                appliedNames = Object.keys(networkPolicies);
-            } catch {
-                appliedNames = policies.getAppliedPresets(sandboxName);
-            }
-        }
-
-        const presets = allPresets.map(p => ({
-            name: p.name,
-            file: p.file,
-            description: p.description,
-            applied: appliedNames.includes(p.name),
-        }));
-        res.json({ ok: true, presets });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message, presets: [] });
-    }
-});
-
-app.post('/api/policies/apply', async (req, res) => {
-    const { sandboxName, presetName } = req.body;
-    if (!sandboxName || !presetName) {
-        return res.status(400).json({ ok: false, error: 'sandboxName and presetName are required' });
-    }
-    try {
-        const policies = require(join(NEMOCLAW_ROOT, 'bin', 'lib', 'policies.js'));
-        const presetPolicy = policies.loadPresetPolicy(presetName);
-        if (!presetPolicy) {
-            return res.status(404).json({ ok: false, error: `Preset '${presetName}' not found` });
-        }
-
-        let currentPolicy = {};
-        try {
-            const config = await grpcClient.getSandboxConfig(sandboxName);
-            currentPolicy = config.policy || {};
-        } catch { /* start fresh if sandbox config not available */ }
-
-        const mergedPolicy = {
-            ...currentPolicy,
-            networkPolicies: {
-                ...(currentPolicy.networkPolicies || {}),
-                ...(presetPolicy.network_policies || {}),
-            },
-        };
-
-        await grpcClient.updateConfig(sandboxName, { policy: mergedPolicy });
-        res.json({ ok: true, message: `Applied '${presetName}' to '${sandboxName}'` });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-app.post('/api/policies/remove', async (req, res) => {
-    const { sandboxName, presetName } = req.body;
-    if (!sandboxName || !presetName) {
-        return res.status(400).json({ ok: false, error: 'sandboxName and presetName are required' });
-    }
-    try {
-        const config = await grpcClient.getSandboxConfig(sandboxName);
-        const currentPolicy = config.policy || {};
-        const networkPolicies = { ...(currentPolicy.networkPolicies || {}) };
-
-        delete networkPolicies[presetName];
-
-        const updatedPolicy = {
-            ...currentPolicy,
-            networkPolicies,
-        };
-
-        await grpcClient.updateConfig(sandboxName, { policy: updatedPolicy });
-        res.json({ ok: true, message: `Removed '${presetName}' from '${sandboxName}'` });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-// ── Inference Config — gRPC native ──────────────────────────────
-
-const NEMOCLAW_CONFIG_DIR = join(homedir(), '.nemoclaw');
-const INFERENCE_CONFIG_FILE = join(NEMOCLAW_CONFIG_DIR, 'config.json');
-const CREDENTIALS_VAULT_FILE = join(NEMOCLAW_CONFIG_DIR, 'credentials.json');
-
-function ensureNemoClawConfigDir() {
-    if (!existsSync(NEMOCLAW_CONFIG_DIR)) {
-        mkdirSync(NEMOCLAW_CONFIG_DIR, { recursive: true });
-    }
-}
-
-/** Validates that an API key looks reasonable (non-empty, no corruption). */
-function isValidApiKey(key) {
-    if (!key || typeof key !== 'string') return false;
-    const trimmed = key.trim();
-    return trimmed.length >= 8 && !/[\x00-\x1f]/.test(trimmed);
-}
-
-function loadInferenceConfig() {
-    ensureNemoClawConfigDir();
-    if (!existsSync(INFERENCE_CONFIG_FILE)) {
-        return null;
-    }
-    try {
-        return JSON.parse(readFileSync(INFERENCE_CONFIG_FILE, 'utf-8'));
-    } catch {
-        return null;
-    }
-}
-
-function saveInferenceConfigToDisk(config) {
-    ensureNemoClawConfigDir();
-    writeFileSync(INFERENCE_CONFIG_FILE, JSON.stringify(config, null, 2));
-}
-
-// ── Per-Provider Credential Vault ───────────────────────────────
-//
-// Stores API keys indexed by provider key so they persist across
-// provider switches and redeployments.  Users configure a key once;
-// subsequent deploys auto-fill from the vault.
-
-function loadCredentialVault() {
-    ensureNemoClawConfigDir();
-    if (!existsSync(CREDENTIALS_VAULT_FILE)) return {};
-    try {
-        return JSON.parse(readFileSync(CREDENTIALS_VAULT_FILE, 'utf-8'));
-    } catch {
-        return {};
-    }
-}
-
-function saveCredentialToVault(providerKey, apiKey) {
-    if (!providerKey || !apiKey || !isValidApiKey(apiKey)) return;
-    const vault = loadCredentialVault();
-    vault[providerKey] = apiKey;
-    ensureNemoClawConfigDir();
-    writeFileSync(CREDENTIALS_VAULT_FILE, JSON.stringify(vault, null, 2), { mode: 0o600 });
-}
-
-function getCredentialFromVault(providerKey) {
-    const vault = loadCredentialVault();
-    return vault[providerKey] || null;
-}
+// ── Agent Chat Routing ──────────────────────────────────────────
 
 /**
- * Restore all persisted API keys into process.env at startup.
- * Reads from both the vault (per-provider) and legacy config.json.
+ * Route chat messages directly through the selected OpenClaw sandbox
+ * instead of hitting the external LLM directly. This ensures that
+ * all AI interactions, tool usages, and agent skills are properly
+ * constrained by the network policies and environment of the sandbox.
  */
-function restoreApiKeysAtStartup() {
-    // Restore from per-provider vault
-    try {
-        const vault = loadCredentialVault();
-        for (const [provKey, apiKey] of Object.entries(vault)) {
-            if (!isValidApiKey(apiKey)) continue;
-            const envVar = `${provKey.toUpperCase().replace(/-/g, '_')}_API_KEY`;
-            process.env[envVar] = apiKey;
-            console.log(`  ✓ Restored ${envVar} from credential vault`);
-        }
-    } catch (err) {
-        console.warn('[startup] Could not restore credentials from vault:', err.message);
+app.post('/api/chat/message', async (req, res) => {
+    const { message, sandbox: sandboxId, stream, systemPrompt } = req.body;
+
+    if (!message || !sandboxId) {
+        return res.status(400).json({ error: 'message and sandbox ID are required' });
     }
 
-    // Restore from legacy config.json (backwards compat)
-    try {
-        const cfg = loadInferenceConfig();
-        if (!cfg) return;
-        const envVar = cfg.credentialEnv;
-        const key = cfg._apiKey;
-        if (envVar && key && isValidApiKey(key) && !process.env[envVar]) {
-            process.env[envVar] = key;
-            console.log(`  ✓ Restored ${envVar} from persisted config`);
-        }
-    } catch (err) {
-        console.warn('[startup] Could not restore API key from config:', err.message);
-    }
-}
-
-// Restore all API keys into process.env immediately on module load
-restoreApiKeysAtStartup();
-
-app.get('/api/inference', async (req, res) => {
-    try {
-        const gwConfig = await grpcClient.getClusterInference();
-        const localConfig = loadInferenceConfig() || {};
-        res.json({
-            config: {
-                provider: gwConfig.providerName || localConfig.provider || '',
-                model: gwConfig.modelId || localConfig.model || '',
-                routeName: gwConfig.routeName || '',
-                version: gwConfig.version || '',
-                endpointUrl: localConfig.endpointUrl || '',
-                credentialEnv: localConfig.credentialEnv || '',
-                endpointType: localConfig.endpointType || gwConfig.providerName || '',
-                providerLabel: localConfig.providerLabel || gwConfig.providerName || '',
-            },
-        });
-    } catch {
-        const config = loadInferenceConfig();
-        res.json({ config: config || {} });
-    }
-});
-
-app.put('/api/inference', async (req, res) => {
-    try {
-        const { provider, model, endpointUrl, credentialEnv, apiKey } = req.body;
-        if (!provider) {
-            return res.status(400).json({ ok: false, error: 'provider is required' });
-        }
-
-        const providerName = `nemoclaw-${provider}`;
-
-        // Resolve API key: explicit > vault > existing config
-        const resolvedApiKey = apiKey || getCredentialFromVault(provider);
-
-        // Best-effort gRPC — save locally even if gateway is unreachable
-        let gatewayWarning = '';
-        const credentials = {};
-        const config = {};
-        if (resolvedApiKey) {
-            credentials[grpcClient.mapProviderToCredentialKey(provider)] = resolvedApiKey;
-        }
-        if (endpointUrl) {
-            config[grpcClient.mapProviderToConfigKey(provider)] = endpointUrl;
-        }
-
-        try {
-            await grpcClient.ensureProvider(
-                providerName,
-                grpcClient.mapProviderToGrpcType(provider),
-                credentials,
-                config,
-            );
-            await grpcClient.setClusterInference(providerName, model || '');
-        } catch (grpcErr) {
-            // Gateway unreachable — continue with local-only save
-            gatewayWarning = `Gateway not reachable (${grpcErr.message}). Config saved locally.`;
-            console.warn('[inference] gRPC save failed, persisting locally:', grpcErr.message);
-        }
-
-        const existing = loadInferenceConfig() || {};
-        const envVar = credentialEnv || `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
-        const updated = {
-            ...existing,
-            endpointType: provider,
-            endpointUrl: endpointUrl || existing.endpointUrl || '',
-            model: model || existing.model || '',
-            credentialEnv: envVar,
-            provider,
-            providerLabel: provider,
-            onboardedAt: new Date().toISOString(),
-        };
-
-        if (resolvedApiKey) {
-            process.env[envVar] = resolvedApiKey;
-            updated._apiKey = resolvedApiKey;
-            // Persist to per-provider vault so re-deploys don't need re-entry
-            saveCredentialToVault(provider, resolvedApiKey);
-        }
-
-        saveInferenceConfigToDisk(updated);
-        const result = { ok: true, config: updated };
-        if (gatewayWarning) result.warning = gatewayWarning;
-        res.json(result);
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-app.post('/api/inference/test', async (req, res) => {
-    try {
-        const { endpoint, apiKey } = req.body;
-        if (!endpoint) {
-            return res.status(400).json({ ok: false, error: 'endpoint is required' });
-        }
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-
-        try {
-            const headers = { 'Content-Type': 'application/json' };
-            if (apiKey) {
-                headers['Authorization'] = `Bearer ${apiKey}`;
-            }
-            const modelsUrl = endpoint.replace(/\/+$/, '') + '/models';
-            const response = await fetch(modelsUrl, {
-                headers,
-                signal: controller.signal,
-            });
-            clearTimeout(timeout);
-
-            if (response.ok) {
-                const data = await response.json();
-                const models = data.data?.map(m => m.id) || [];
-                res.json({ ok: true, status: response.status, models: models.slice(0, 20) });
-            } else {
-                res.json({ ok: false, status: response.status, error: `HTTP ${response.status}` });
-            }
-        } catch (fetchErr) {
-            clearTimeout(timeout);
-            res.json({ ok: false, error: fetchErr.message || 'Connection failed' });
-        }
-    } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
-    }
-});
-
-// ── Inference Routing Transparency ──────────────────────────────
-
-app.get('/api/inference/routes', async (req, res) => {
-    try {
-        const bundle = await grpcClient.getInferenceBundle();
-        const routes = (bundle.routes || []).map(route => ({
-            name: route.name || '',
-            baseUrl: route.baseUrl || '',
-            protocols: route.protocols || [],
-            hasCredential: !!(route.apiKey && route.apiKey !== ''),
-            credentialMasked: route.apiKey ? `${route.apiKey.slice(0, 4)}...${route.apiKey.slice(-4)}` : '',
-            modelId: route.modelId || '',
-            providerType: route.providerType || '',
-        }));
-        res.json({
-            ok: true,
-            routes,
-            revision: bundle.revision || '',
-            generatedAt: bundle.generatedAtMs ? new Date(parseInt(bundle.generatedAtMs, 10)).toISOString() : '',
-        });
-    } catch (err) {
-        // Gateway unreachable — return empty routes instead of 500
-        res.json({ ok: true, routes: [], revision: '', generatedAt: '', warning: err.message });
-    }
-});
-
-// ── Log Streaming (SSE via gRPC WatchSandbox) ───────────────────
-
-app.get('/api/sandboxes/:name/logs', async (req, res) => {
-    const { name } = req.params;
-
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-    });
-
-    try {
-        let sandboxId = name;
-        try {
-            const resp = await grpcClient.getSandbox(name);
-            sandboxId = resp.sandbox?.id || name;
-        } catch { /* use name as fallback identifier */ }
-
-        const stream = grpcClient.watchSandbox(sandboxId, {
-            followStatus: false,
-            followLogs: true,
-            logTailLines: parseInt(req.query.tail || '100', 10),
-        });
-
-        stream.on('data', (event) => {
-            if (event.log) {
-                const logLine = `[${event.log.level || 'INFO'}] ${event.log.message || ''}`;
-                res.write(`data: ${JSON.stringify({
-                    line: logLine,
-                    source: event.log.source || 'gateway',
-                    level: event.log.level || 'INFO',
-                })}\n\n`);
-            }
-        });
-
-        stream.on('end', () => {
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
-        });
-
-        stream.on('error', (err) => {
-            res.write(`data: ${JSON.stringify({ error: err.message || 'Stream error' })}\n\n`);
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
-        });
-
-        req.on('close', () => {
-            stream.cancel();
-        });
-    } catch (err) {
-        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
-    }
-});
-
-// ── Onboard Execution (SSE via gRPC) ────────────────────────────
-
-app.get('/api/onboard/execute', async (req, res) => {
-    // Config via query: ?config=URL-encoded-JSON or individual params
-    let sandboxName, provider, model, apiKey, endpoint;
-    if (req.query.config) {
-        try {
-            const cfg = JSON.parse(req.query.config);
-            ({ sandboxName, provider, model, apiKey, endpoint } = cfg);
-        } catch { /* fallback to individual params */ }
-    }
-    sandboxName = sandboxName || req.query.sandboxName;
-    provider = provider || req.query.provider;
-    model = model || req.query.model;
-    apiKey = apiKey || req.query.apiKey;
-    endpoint = endpoint || req.query.endpoint;
-
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-    });
-    res.flushHeaders();
-
-    let clientDisconnected = false;
-    const sendEvent = (data) => {
-        if (clientDisconnected) return;
-        try {
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-        } catch { /* client gone */ }
-    };
-
-    req.on('close', () => { clientDisconnected = true; });
-
-    const safeName = (sandboxName || 'my-assistant').toLowerCase().replace(/[^a-z0-9-]/g, '');
-    const providerType = provider || 'cloud';
-    const providerName = `nemoclaw-${providerType}`;
-
-    // Resolve API key: explicit > vault > existing config
-    const resolvedApiKey = apiKey || getCredentialFromVault(providerType);
-
-    // Step 1: Create/update provider in gateway (idempotent)
-    try {
-        sendEvent({ step: 'provider', status: 'running', message: 'Configuring inference provider...' });
-        const credentials = {};
-        const config = {};
-        if (resolvedApiKey) {
-            credentials[grpcClient.mapProviderToCredentialKey(providerType)] = resolvedApiKey;
-        }
-        if (endpoint) {
-            config[grpcClient.mapProviderToConfigKey(providerType)] = endpoint;
-        }
-        await grpcClient.ensureProvider(
-            providerName,
-            grpcClient.mapProviderToGrpcType(providerType),
-            credentials,
-            config,
-        );
-        sendEvent({ step: 'provider', status: 'complete', message: 'Provider configured' });
-    } catch (err) {
-        sendEvent({ step: 'provider', status: 'error', message: `Provider setup failed: ${err.message}` });
+    // Set headers for standard JSON or SSE streaming response
+    if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
     }
 
-    // Step 2: Set inference configuration
     try {
-        sendEvent({ step: 'inference', status: 'running', message: 'Setting inference configuration...' });
-        await grpcClient.setClusterInference(providerName, model || '');
-        sendEvent({ step: 'inference', status: 'complete', message: 'Inference configured' });
-    } catch (err) {
-        sendEvent({ step: 'inference', status: 'error', message: `Inference config failed: ${err.message}` });
-    }
-
-    // Step 3: Create sandbox (idempotent — handles UNIQUE constraint)
-    let sandboxId = null;
-    try {
-        sendEvent({ step: 'sandbox', status: 'running', message: `Creating sandbox '${safeName}'...` });
-        const spec = {
-            environment: {},
-            template: {},
-            policy: {
-                filesystem: { includeWorkdir: true },
-                landlock: { compatibility: 'best_effort' },
-            },
-            providers: [providerName],
-        };
-        const resp = await grpcClient.ensureSandbox(spec, safeName);
-        sandboxId = resp.sandbox?.id || '';
-        sendEvent({ step: 'sandbox', status: 'complete', message: `Sandbox '${safeName}' created` });
-    } catch (err) {
-        sendEvent({ step: 'sandbox', status: 'error', message: `Sandbox creation failed: ${err.message}` });
-        sendEvent({ done: true, success: false, sandboxName: safeName });
-        res.end();
-        return;
-    }
-
-    // Save inference config locally + persist API key to vault
-    try {
-        const apiKeyEnvVar = `${providerType.toUpperCase().replace(/-/g, '_')}_API_KEY`;
-        const inferenceConfig = {
-            endpointType: providerType,
-            endpointUrl: endpoint || '',
-            model: model || '',
-            provider: providerType,
-            providerLabel: providerType,
-            onboardedAt: new Date().toISOString(),
-        };
-        if (resolvedApiKey) {
-            inferenceConfig.credentialEnv = apiKeyEnvVar;
-            inferenceConfig._apiKey = resolvedApiKey;
-            process.env[apiKeyEnvVar] = resolvedApiKey;
-            saveCredentialToVault(providerType, resolvedApiKey);
+        const { sandboxes } = registry.listSandboxes();
+        const sbNode = sandboxes.find(s => s.name === sandboxId || s.id === sandboxId);
+        
+        if (!sbNode) {
+            throw new Error(`Sandbox ${sandboxId} not found in registry`);
         }
-        saveInferenceConfigToDisk(inferenceConfig);
-    } catch { /* best-effort */ }
 
-    // Register the sandbox as a claw
-    try {
-        registerClaw({
-            id: safeName,
-            sandboxName: safeName,
-            gatewayName: 'nemoclaw',
-            config: {
-                provider: providerType,
-                model: model || '',
-                endpointUrl: endpoint || '',
-            },
-        });
-    } catch { /* claw may already exist */ }
+        // Dynamically collect credentials mapped to installed extensions.
+        // E.g., if marvin has 'discord' installed, inject DISCORD_BOT_TOKEN
+        const extStatePath = join(DATA_DIR, 'extensions-state.json');
+        let sandboxExts = {};
+        if (require('fs').existsSync(extStatePath)) {
+            const allState = JSON.parse(require('fs').readFileSync(extStatePath, 'utf8'));
+            sandboxExts = allState[sbNode.name] || allState[sbNode.id] || {};
+        }
 
-    // Step 4: Watch sandbox deployment progress
-    try {
-        sendEvent({ step: 'deploy', status: 'running', message: 'Waiting for sandbox to become ready...' });
-        const stream = grpcClient.watchSandbox(sandboxId, {
-            followStatus: true,
-            followLogs: true,
-            stopOnTerminal: true,
-            logTailLines: 20,
-        });
+        const extensions = require('./routes/extensions').loadRegistry();
 
-        stream.on('data', (event) => {
-            if (clientDisconnected) {
-                stream.cancel();
-                return;
-            }
-            if (event.sandbox) {
-                const phase = event.sandbox.phase || 'SANDBOX_PHASE_UNSPECIFIED';
-                const status = grpcClient.mapPhaseToStatus(phase);
-                sendEvent({ step: 'deploy', status: 'running', message: `Sandbox phase: ${status}`, phase });
+        // Dynamically prepend context to the chat message
+        let finalMessage = message;
+        if (systemPrompt) {
+            finalMessage = `[System Context & Capabilities]\n${systemPrompt}\n\n[User Message]\n${message}`;
+        }
 
-                if (phase === 'SANDBOX_PHASE_READY') {
-                    sendEvent({ step: 'complete', status: 'complete', message: `Sandbox '${safeName}' deployed successfully` });
-                    sendEvent({ done: true, success: true, sandboxName: safeName });
-                    res.end();
-                } else if (phase === 'SANDBOX_PHASE_ERROR') {
-                    sendEvent({ step: 'deploy', status: 'error', message: 'Sandbox entered error state' });
-                    sendEvent({ done: true, success: false, sandboxName: safeName });
-                    res.end();
+        // Escape the combined message for safe shell embedding
+        const escapedMessage = finalMessage.replace(/'/g, "'\\''");
+
+        // Build shell-level export lines for extension credentials.
+        // We do this in addition to (not instead of) the gRPC environment map
+        // because openclaw agent may spawn subshells or Python subprocesses
+        // that don't inherit the gRPC-injected top-level environment.
+        // Also source the persistent .channel-env file written during install.
+        const envExports = [
+            // Point OpenClaw at the writable config we created during extension sync
+            '[ -f /sandbox/.openclaw-data/openclaw.json ] && export OPENCLAW_CONFIG_PATH=/sandbox/.openclaw-data/openclaw.json',
+            // Source the persistent env file written by the install/sync-channel route
+            '[ -f /sandbox/.openclaw-data/.channel-env ] && . /sandbox/.openclaw-data/.channel-env',
+            // Export each extension credential explicitly
+            Object.keys(sandboxExts).map(extId => {
+                const ext = extensions.find(e => e.id === extId);
+                return ext && ext.credentialKey
+                    ? `export ${ext.credentialKey}="${sandboxExts[extId].credential || ''}"`
+                    : '';
+            }).filter(Boolean).join('\n')
+        ].join('\n');
+
+        // Command to execute openclaw inside the sandbox.
+        // Note: It uses `--auth none` assuming intra-sandbox traffic implies consent,
+        // but egress is still controlled by standard NVIDIA Landlock policies.
+        const cmd = [
+            'bash', '-c',
+            `${envExports}\nOPENCLAW_BIN=$(which openclaw 2>/dev/null || ls /usr/local/bin/openclaw /usr/bin/openclaw /root/.local/bin/openclaw /home/user/.local/bin/openclaw 2>/dev/null | head -1)\n` +
+            `if [ -z "$OPENCLAW_BIN" ]; then echo "{\"error\":\"openclaw binary not found inside sandbox\"}"; exit 1; fi\n` +
+            `"$OPENCLAW_BIN" bot chat --prompt '${escapedMessage}' --json`
+        ];
+
+        let accumulatedOutput = "";
+
+        // Send via gRPC stream
+        const execStream = grpcClient.execSandbox(sbNode.id || sbNode.name, cmd, { timeoutSeconds: 120 });
+
+        execStream.on('data', (response) => {
+            if (response.stdout) {
+                accumulatedOutput += response.stdout;
+                if (stream) {
+                    // Send chunk directly to UI
+                    res.write(`data: ${JSON.stringify({ chunk: response.stdout })}\n\n`);
                 }
             }
-            if (event.log) {
-                sendEvent({
-                    step: 'deploy',
-                    status: 'running',
-                    message: `[${event.log.level || 'INFO'}] ${event.log.message || ''}`,
-                });
+            if (response.stderr) {
+                console.warn(`[chat][${sandboxId}] stderr: ${response.stderr}`);
             }
         });
 
-        stream.on('error', (err) => {
-            if (!clientDisconnected) {
-                sendEvent({ step: 'deploy', status: 'error', message: `Watch error: ${err.message}` });
-                sendEvent({ done: true, success: false, sandboxName: safeName });
+        execStream.on('end', () => {
+            if (stream) {
+                res.write(`data: [DONE]\n\n`);
                 res.end();
+            } else {
+                // Determine if we received a JSON envelope from openclaw
+                try {
+                    // OpenClaw CLI outputs strict JSON objects per line when using --json
+                    const lines = accumulatedOutput.trim().split('\n').filter(Boolean);
+                    if (lines.length > 0) {
+                        const lastLine = JSON.parse(lines[lines.length - 1]);
+                        res.json({ reply: lastLine.message || lastLine.content || accumulatedOutput });
+                    } else {
+                        res.json({ reply: accumulatedOutput });
+                    }
+                } catch {
+                    res.json({ reply: accumulatedOutput });
+                }
             }
         });
 
-        stream.on('end', () => {
-            if (!clientDisconnected && !res.writableEnded) {
-                sendEvent({ done: true, success: true, sandboxName: safeName });
+        execStream.on('error', (err) => {
+            console.error(`[chat][${sandboxId}] stream error: ${err.message}`);
+            if (stream) {
+                res.write(`data: {"error": "${err.message}"}\n\n`);
                 res.end();
+            } else {
+                res.status(500).json({ error: err.message });
             }
         });
+
     } catch (err) {
-        sendEvent({ step: 'deploy', status: 'error', message: `Failed to watch: ${err.message}` });
-        sendEvent({ done: true, success: false, sandboxName: safeName });
-        res.end();
-    }
-});
-
-// ── Chat Proxy (Direct LLM API) ────────────────────────────────
-
-// In-memory per-session conversation history for multi-turn chat.
-// Keys: sessionId → { messages: [{role, content}], lastAccess: Date }
-const chatSessions = new Map();
-const MAX_SESSION_MESSAGES = 50;
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-function getSessionHistory(sessionId) {
-    const session = chatSessions.get(sessionId);
-    if (session) {
-        session.lastAccess = Date.now();
-        return session.messages;
-    }
-    const messages = [{
-        role: 'system',
-        content: 'You are an AI assistant running inside a secure OpenShell sandbox managed by NemoClaw. '
-            + 'You can help the user with coding, research, data analysis, and general questions. '
-            + 'Be concise and helpful. Format code with markdown fences when appropriate.',
-    }];
-    chatSessions.set(sessionId, { messages, lastAccess: Date.now() });
-    return messages;
-}
-
-// Periodic cleanup of stale sessions
-setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of chatSessions) {
-        if (now - session.lastAccess > SESSION_TTL_MS) {
-            chatSessions.delete(id);
-        }
-    }
-}, 5 * 60 * 1000);
-
-app.post('/api/chat/message', async (req, res) => {
-    const { sandboxName, message, sessionId } = req.body;
-    if (!sandboxName || !message) {
-        return res.status(400).json({ ok: false, error: 'sandboxName and message required' });
-    }
-    const safeSession = (sessionId || 'gui-session').replace(/[^a-zA-Z0-9-_]/g, '');
-
-    // Verify the sandbox exists (preserves API contract)
-    try {
-        await grpcClient.getSandbox(sandboxName);
-    } catch {
-        return res.json({
-            ok: false,
-            response: `Sandbox '${sandboxName}' not found or unreachable. Check the Sandboxes page to verify it is running.`,
-            error: 'Sandbox not found',
-        });
-    }
-
-    // Resolve inference configuration
-    const inferCfg = loadInferenceConfig() || {};
-    const credEnv = inferCfg.credentialEnv;
-    const resolvedApiKey = (credEnv && process.env[credEnv])
-        || inferCfg._apiKey
-        || getCredentialFromVault(inferCfg.provider)
-        || '';
-
-    if (!resolvedApiKey && inferCfg.provider && inferCfg.provider !== 'ollama') {
-        return res.json({
-            ok: false,
-            response: `Inference API key not configured. Please go to the Inference Config page and save your ${inferCfg.provider} API key, then try again.`,
-            error: 'Missing API key',
-        });
-    }
-
-    // Resolve endpoint and model
-    let baseUrl = inferCfg.endpointUrl || '';
-    if (!baseUrl) {
-        // Try to get from gateway inference bundle
-        try {
-            const bundle = await grpcClient.getInferenceBundle();
-            const route = (bundle.routes || [])[0];
-            if (route?.baseUrl) baseUrl = route.baseUrl;
-        } catch { /* fall through to default */ }
-    }
-    if (!baseUrl) baseUrl = 'https://api.openai.com/v1';
-    const completionsUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
-
-    const model = inferCfg.model || 'gpt-4o-mini';
-
-    // Build conversation history
-    const history = getSessionHistory(safeSession);
-    history.push({ role: 'user', content: message });
-
-    // Cap history length
-    while (history.length > MAX_SESSION_MESSAGES + 1) {
-        // Keep system message (index 0), remove oldest user/assistant pair
-        history.splice(1, 1);
-    }
-
-    // Call the OpenAI-compatible API
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
-
-    try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (resolvedApiKey) {
-            headers['Authorization'] = `Bearer ${resolvedApiKey}`;
-        }
-
-        const fetchRes = await fetch(completionsUrl, {
-            method: 'POST',
-            headers,
-            signal: controller.signal,
-            body: JSON.stringify({
-                model,
-                messages: history,
-                max_tokens: 4096,
-            }),
-        });
-        clearTimeout(timeout);
-
-        if (!fetchRes.ok) {
-            const errText = await fetchRes.text().catch(() => '');
-            let detail;
-            try { detail = JSON.parse(errText)?.error?.message || errText; } catch { detail = errText; }
-
-            if (fetchRes.status === 401) {
-                return res.json({
-                    ok: false,
-                    response: `Authentication failed (HTTP 401). Your API key may be invalid or expired.\n\nGo to Inference Config to update it.`,
-                    error: `HTTP 401: ${detail}`,
-                });
-            }
-
-            return res.json({
-                ok: false,
-                response: `LLM provider returned HTTP ${fetchRes.status}: ${detail || 'Unknown error'}\n\nCheck your inference configuration.`,
-                error: `HTTP ${fetchRes.status}`,
-            });
-        }
-
-        const data = await fetchRes.json();
-        const assistantContent = data.choices?.[0]?.message?.content || '(no response)';
-
-        // Store assistant reply in session history
-        history.push({ role: 'assistant', content: assistantContent });
-
-        res.json({ ok: true, response: assistantContent });
-    } catch (err) {
-        clearTimeout(timeout);
-        const msg = err.message || 'Unknown error';
-        let response;
-        if (err.name === 'AbortError' || msg.includes('abort')) {
-            response = 'Request timed out after 60 seconds. The model may be overloaded — try again.';
-        } else if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND')) {
-            response = `Cannot reach the inference endpoint at ${baseUrl}.\n\nMake sure the endpoint URL is correct and the service is running.`;
+        console.error('Chat routing error:', err);
+        if (stream) {
+            res.write(`data: {"error": "${err.message}"}\n\n`);
+            res.end();
         } else {
-            response = `Failed to reach inference provider: ${msg}\n\nCheck your endpoint URL and API key in Inference Config.`;
+            res.status(500).json({ error: err.message });
         }
-
-        // Remove the user message from history since we didn't get a response
-        if (history.length > 0 && history[history.length - 1].role === 'user') {
-            history.pop();
-        }
-
-        res.json({ ok: false, response, error: msg });
     }
 });
 
-// ── Onboard Preflight ───────────────────────────────────────────
 
-app.get('/api/onboard/preflight', async (req, res) => {
-    const checks = [];
-
-    try {
-        const health = await gatewayHealth.checkHealth();
-        checks.push({
-            name: 'OpenShell Gateway',
-            ok: health.healthy,
-            detail: health.healthy
-                ? `Connected (${health.method}) — v${health.version || 'unknown'}`
-                : (health.error || 'Not reachable'),
-        });
-    } catch {
-        checks.push({ name: 'OpenShell Gateway', ok: false, detail: 'Health check failed' });
-    }
-
-    try {
-        const ports = loadPortsModule();
-        const portStatus = await ports.checkAllPorts();
-        for (const ps of portStatus) {
-            if (ps.name === 'GATEWAY_PORT' || ps.name === 'DASHBOARD_PORT') {
-                checks.push({
-                    name: `Port ${ps.port} (${ps.name})`,
-                    ok: ps.available,
-                    detail: ps.available ? 'Available' : ps.reason || 'In use',
-                });
-            }
-        }
-    } catch {
-        checks.push({ name: 'Port Check', ok: false, detail: 'Could not load ports module' });
-    }
-
-    try {
-        const resp = await grpcClient.listProviders();
-        const count = (resp.providers || []).length;
-        checks.push({
-            name: 'Inference Providers',
-            ok: true,
-            detail: count > 0 ? `${count} provider(s) configured` : 'No providers — will configure during onboard',
-        });
-    } catch {
-        checks.push({ name: 'Inference Providers', ok: true, detail: 'Will configure during onboard', warning: true });
-    }
-
-    res.json({ checks });
-});
-
-// ── WebSocket for real-time updates ─────────────────────────────
-
-let lastSandboxJson = '';
-let cachedSandboxes = [];
-let cachedGatewayHealthy = null;
-let lastClawsJson = '';
-let cachedClaws = [];
-
-function broadcast(data) {
-    const msg = JSON.stringify(data);
-    for (const client of wss.clients) {
-        if (client.readyState === client.OPEN) {
-            client.send(msg);
-        }
-    }
-}
-
-async function sendCurrentState(ws) {
-    if (ws.readyState !== ws.OPEN) return;
-    try {
-        const health = await gatewayHealth.checkHealth();
-        ws.send(JSON.stringify({
-            type: 'status',
-            gateway: { healthy: health.healthy, method: health.method, version: health.version },
-            sandboxes: cachedSandboxes,
-            claws: cachedClaws,
-            timestamp: new Date().toISOString(),
-        }));
-    } catch {
-        ws.send(JSON.stringify({
-            type: 'status',
-            gateway: { healthy: false },
-            sandboxes: cachedSandboxes,
-            claws: cachedClaws,
-            timestamp: new Date().toISOString(),
-        }));
-    }
-}
-
-const pollInterval = setInterval(async () => {
-    if (wss.clients.size === 0) return;
-
-    let gwHealthy = cachedGatewayHealthy;
-    try {
-        const resp = await grpcClient.listSandboxes();
-        const sandboxes = (resp.sandboxes || []).map(grpcClient.sandboxToDto);
-        const json = JSON.stringify(sandboxes);
-        if (json !== lastSandboxJson) {
-            lastSandboxJson = json;
-            cachedSandboxes = sandboxes;
-            broadcast({ type: 'sandbox:list', sandboxes });
-        }
-    } catch {
-        // gRPC unavailable — keep cached state
-    }
-
-    try {
-        const health = await gatewayHealth.checkHealthGrpc();
-        gwHealthy = health.healthy;
-    } catch {
-        gwHealthy = false;
-    }
-    if (gwHealthy !== cachedGatewayHealthy) {
-        cachedGatewayHealthy = gwHealthy;
-    }
-
-    try {
-        const claws = await listClaws();
-        const clawJson = JSON.stringify(claws);
-        if (clawJson !== lastClawsJson) {
-            lastClawsJson = clawJson;
-            cachedClaws = claws;
-            broadcast({ type: 'claw:list', claws });
-        }
-    } catch { /* best-effort */ }
-
-    broadcast({
-        type: 'status',
-        gateway: { healthy: gwHealthy },
-        sandboxes: cachedSandboxes,
-        claws: cachedClaws,
-        timestamp: new Date().toISOString(),
-    });
-}, 5000);
-
-wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'connected' }));
-
-    ws.on('message', (raw) => {
-        try {
-            const msg = JSON.parse(raw.toString());
-            if (msg.type === 'subscribe') {
-                sendCurrentState(ws);
-            }
-        } catch { /* ignore */ }
-    });
-});
-
-// ── SPA fallback ────────────────────────────────────────────────
+// Fallback for SPA routing if requested URL isn't an API endpoint
 app.get('*', (req, res) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
-        return res.status(404).json({ error: 'Not found' });
-    }
-    const indexPath = join(distDir, 'index.html');
-    if (existsSync(indexPath)) {
-        res.sendFile(indexPath);
+    if (process.env.NODE_ENV !== 'development') {
+        res.sendFile(join(distDir, 'index.html'));
     } else {
-        res.send(`
-      <html>
-        <body style="background:#1a1a2e;color:#fff;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-          <div style="text-align:center">
-            <h1 style="color:#76B900">NemoClaw Dashboard API</h1>
-            <p>API server is running. Run <code>npm run dev</code> in gui/ for the frontend.</p>
-          </div>
-        </body>
-      </html>
-    `);
+        res.status(404).send('Vite Dev Server handles these routes in development mode.');
     }
 });
 
-server.listen(PORT, () => {
-    console.log(`  NemoClaw Dashboard API running on http://localhost:${PORT}`);
+
+// Initialize server
+const serverPort = PORT;
+server.listen(serverPort, () => {
+    console.log(`  NemoClaw Dashboard API running on http://localhost:${serverPort}`);
+    // Warm up initialization calls
+    try {
+        const { sandboxes } = registry.listSandboxes();
+        console.log(`  ✓ Claw sync complete: ${sandboxes.length} claw(s) in registry`);
+    } catch {
+        // Suppress initial errors if backend is not fully setup
+    }
 });
