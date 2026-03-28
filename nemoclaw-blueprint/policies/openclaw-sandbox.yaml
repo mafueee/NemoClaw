@@ -1,3 +1,4 @@
+
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,12 +18,12 @@ filesystem_policy:
     - /app
     - /etc
     - /var/log
-    - /sandbox/.openclaw
+    - /sandbox/.openclaw            # Immutable gateway config
   read_write:
     - /sandbox
     - /tmp
     - /dev/null
-    - /sandbox/.openclaw-data
+    - /sandbox/.openclaw-data       # Writable agent/plugin state (symlinked from .openclaw)
 
 landlock:
   compatibility: best_effort
@@ -80,13 +81,32 @@ network_policies:
       - host: github.com
         port: 443
         access: full
-      - host: api.github.com
-        port: 443
-        access: full
     binaries:
       - { path: /usr/bin/gh }
       - { path: /usr/bin/git }
 
+  # GitHub REST API — method-restricted, gh CLI only.
+  # Separate from github (CONNECT tunnel for git push/pull) to enforce
+  # least-privilege. Only the gh CLI may call the REST API; git uses
+  # the CONNECT tunnel above.
+  github_rest_api:
+    name: github_rest_api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+          - allow: { method: PATCH, path: "/**" }
+          - allow: { method: PUT, path: "/**" }
+          - allow: { method: DELETE, path: "/**" }
+    binaries:
+      - { path: /usr/bin/gh }
+
+  # OpenClaw "phone home"
   clawhub:
     name: clawhub
     endpoints:
@@ -138,6 +158,7 @@ network_policies:
       - { path: /usr/local/bin/openclaw }
       - { path: /usr/local/bin/npm }
 
+  # Messaging pre-allowed for OpenClaw agent channels
   telegram:
     name: telegram
     endpoints:
@@ -152,10 +173,9 @@ network_policies:
     binaries:
       - { path: /usr/local/bin/node }
 
-  # FIX: gateway.discord.gg uses `access: full` (CONNECT tunnel) instead
-  # of `protocol: rest`. The proxy's HTTP idle timeout (~2 min) kills
-  # long-lived WebSocket connections; a CONNECT tunnel avoids HTTP-level
-  # timeouts entirely. See NemoClaw #409.
+  # Discord — gateway.discord.gg uses access: full (CONNECT tunnel) instead
+  # of protocol: rest. The proxy HTTP idle timeout (~2 min) kills WebSocket
+  # connections; CONNECT tunnel bypasses HTTP timeouts. See NemoClaw #409.
   discord:
     name: discord
     endpoints:
@@ -170,6 +190,7 @@ network_policies:
           - allow: { method: PUT, path: "/**" }
           - allow: { method: PATCH, path: "/**" }
           - allow: { method: DELETE, path: "/**" }
+      # WebSocket gateway — MUST use access: full (CONNECT tunnel)
       - host: gateway.discord.gg
         port: 443
         access: full
