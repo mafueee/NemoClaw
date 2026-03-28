@@ -102,7 +102,7 @@ nemoclaw uninstall
 
 ## Architecture
 
-NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP** — the dashboard backend contains **zero CLI subprocess calls**. All sandbox lifecycle, inference routing, provider management, policy updates, log streaming, and agent execution use the same protobuf APIs that the gateway expose.
+NemoClaw communicates with the OpenShell gateway **exclusively via gRPC and HTTP** — the dashboard backend contains **zero CLI subprocess calls**. All sandbox lifecycle, inference routing, provider management, policy updates, log streaming, and agent execution use the same protobuf APIs that the gateway exposes.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -293,7 +293,7 @@ Opens at `http://localhost:3000`. Use `--port` to specify a different port.
 | **🐾 Claw Management** | Create, monitor, reconnect, and destroy multiple claw instances independently under one gateway |
 | **Onboard Wizard** | Step-by-step GUI that deploys sandboxes via gRPC `CreateSandbox` + `WatchSandbox` with SSE-streamed progress. Provider and inference configuration saved locally for resilience. |
 | **Sandbox Manager** | List, inspect, start/stop, and destroy sandboxes with confirmation dialog and live status badges |
-| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) and extension capabilities are injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. |
+| **💬 Claw Agent Chat** | Claw-centric chat interface routed through the sandbox via `ExecSandbox` gRPC. Workspace files (`SOUL.md`, `IDENTITY.md`, `USER.md`) and extension capabilities are injected into the system prompt. Every response displays a **🔒 Sandboxed** badge showing whether inference was policy-constrained. Also parses and visually displays the agent's internal reasoning/thinking process. |
 | **Log Viewer** | Real-time log streaming via gRPC `WatchSandbox` with source and level filtering |
 | **Policy Editor** | View, apply, and remove security policy presets per sandbox. Includes YAML editor with OPA rule validation. |
 | **Inference Config** | Visual provider selection with persistent config, save/load, and test connection. API keys persisted to credential vault. |

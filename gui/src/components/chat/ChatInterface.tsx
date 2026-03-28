@@ -6,6 +6,7 @@ interface Message {
     id: string;
     role: 'user' | 'assistant' | 'system';
     content: string;
+    thought?: string;
     timestamp: Date;
     sandboxed?: boolean;
     warning?: string;
@@ -26,7 +27,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
         {
             id: '1',
             role: 'assistant',
-            content: 'Welcome to the Claw Agent Chat! Select a claw above to start chatting.\n\nYour messages are routed through the selected claw\'s sandbox via ExecSandbox \u2014 all agent actions are constrained by the claw\'s security policy.\n\nYou can ask me to:\n- Browse the web and research topics\n- Write, edit, and run code\n- Manage files and data\n- Interact with APIs and services\n\nAll actions are enforced by the claw\'s Landlock, network, and filesystem policies.',
+            content: 'Welcome to the Claw Agent Chat! Select a claw above to start chatting.\n\nYour messages are routed through the selected claw\'s sandbox via ExecSandbox — all agent actions are constrained by the claw\'s security policy.\n\nYou can ask me to:\n- Browse the web and research topics\n- Write, edit, and run code\n- Manage files and data\n- Interact with APIs and services\n\nAll actions are enforced by the claw\'s Landlock, network, and filesystem policies.',
             timestamp: new Date(),
         },
     ]);
@@ -70,7 +71,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                content: '\u26a0 No claw selected. Please select a claw from the dropdown above.',
+                content: '⚠ No claw selected. Please select a claw from the dropdown above.',
                 timestamp: new Date(),
             }]);
             return;
@@ -91,21 +92,32 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
             const sandboxName = getSelectedSandboxName();
             const result = await api.sendChatMessage(sandboxName, userMsg.content, sessionId);
             if (result.ok === false) {
-                // API returned a structured error \u2014 show as system warning
+                // API returned a structured error — show as system warning
                 const errorMsg: Message = {
                     id: (Date.now() + 1).toString(),
                     role: 'system',
-                    content: `\u26a0 ${result.response || result.error || 'Unknown error from agent'}`,
+                    content: `⚠ ${result.response || result.error || 'Unknown error from agent'}`,
                     timestamp: new Date(),
                     sandboxed: result.sandboxed,
                     warning: result.warning,
                 };
                 setMessages(prev => [...prev, errorMsg]);
             } else {
+                let finalContent = result.response || 'No response received.';
+                let finalThought;
+                if (finalContent.includes('<think>')) {
+                    const match = finalContent.match(/<think>([\s\S]*?)<\/think>/);
+                    if (match) {
+                        finalThought = match[1].trim();
+                        finalContent = finalContent.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                    }
+                }
+
                 const assistantMsg: Message = {
                     id: (Date.now() + 1).toString(),
                     role: 'assistant',
-                    content: result.response || 'No response received.',
+                    content: finalContent,
+                    thought: finalThought,
                     timestamp: new Date(),
                     sandboxed: result.sandboxed,
                     warning: result.warning,
@@ -116,7 +128,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
             const errorMsg: Message = {
                 id: (Date.now() + 1).toString(),
                 role: 'system',
-                content: `\u26a0 Failed to reach the agent: ${err instanceof Error ? err.message : 'Unknown error'}\n\nMake sure the claw's sandbox is running and the gateway is online.`,
+                content: `⚠ Failed to reach the agent: ${err instanceof Error ? err.message : 'Unknown error'}\n\nMake sure the claw's sandbox is running and the gateway is online.`,
                 timestamp: new Date(),
             };
             setMessages(prev => [...prev, errorMsg]);
@@ -138,8 +150,8 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
         <>
             {!embedded && (
                 <div className="page-header">
-                    <h2>\ud83d\udcac Claw Agent Chat</h2>
-                    <p>Chat with your claw \u2014 all inference is routed through the sandbox's security policy</p>
+                    <h2>💬 Claw Agent Chat</h2>
+                    <p>Chat with your claw — all inference is routed through the sandbox's security policy</p>
                 </div>
             )}
 
@@ -155,7 +167,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
                     <label style={{ fontWeight: 500, fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Claw:</label>
                     {claws.length === 0 ? (
                         <span style={{ color: 'var(--nc-text-muted)', fontSize: '0.85rem' }}>
-                            No claws available \u2014 <a href="/claws/new" style={{ color: 'var(--nc-green)' }}>create one</a>
+                            No claws available — <a href="/claws/new" style={{ color: 'var(--nc-green)' }}>create one</a>
                         </span>
                     ) : (
                         <select
@@ -167,7 +179,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
                         >
                             {claws.map(claw => (
                                 <option key={claw.id} value={claw.id}>
-                                    \ud83d\udc3e {claw.id} ({claw.status})
+                                    🐾 {claw.id} ({claw.status})
                                 </option>
                             ))}
                         </select>
@@ -189,6 +201,39 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
                                 <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--nc-amber)', marginBottom: '4px' }}>
                                     SYSTEM
                                 </div>
+                            )}
+                            {msg.thought && (
+                                <details style={{
+                                    marginBottom: 'var(--nc-spacing-sm)',
+                                    background: 'var(--nc-surface-hover)',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--nc-border)',
+                                    overflow: 'hidden'
+                                }}>
+                                    <summary style={{
+                                        padding: '8px 12px',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 600,
+                                        color: 'var(--nc-text-secondary)',
+                                        cursor: 'pointer',
+                                        userSelect: 'none',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}>
+                                        <span style={{ fontSize: '1.2em' }}>🧠</span> Agent Thinking Process
+                                    </summary>
+                                    <div style={{
+                                        padding: '12px',
+                                        fontSize: '0.85rem',
+                                        color: 'var(--nc-text-secondary)',
+                                        whiteSpace: 'pre-wrap',
+                                        background: 'var(--nc-surface)',
+                                        borderTop: '1px solid var(--nc-border)'
+                                    }}>
+                                        {msg.thought}
+                                    </div>
+                                </details>
                             )}
                             <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
                             {/* Sandboxed / Bypassed indicator */}
@@ -212,7 +257,7 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
                                 }}
                                     data-testid={msg.sandboxed ? 'badge-sandboxed' : 'badge-bypassed'}
                                 >
-                                    {msg.sandboxed ? '\ud83d\udd12 Sandboxed' : '\u26a0 Bypassed \u2014 not policy-constrained'}
+                                    {msg.sandboxed ? '🔒 Sandboxed' : '⚠ Bypassed — not policy-constrained'}
                                 </div>
                             )}
                             {msg.warning && (
@@ -227,17 +272,17 @@ export function ChatInterface({ clawId, embedded }: ChatInterfaceProps = {}) {
                             )}
                             {msg.role === 'system' && msg.content.includes('API key') && (
                                 <a href="/inference" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
-                                    \u2192 Reconfigure Inference
+                                    → Reconfigure Inference
                                 </a>
                             )}
                             {msg.role === 'system' && msg.content.includes('not installed') && (
                                 <a href="/claws/new" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
-                                    \u2192 Create New Claw
+                                    → Create New Claw
                                 </a>
                             )}
                             {msg.role === 'system' && msg.content.includes('SSH transport') && (
                                 <a href="/claws" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem', color: 'var(--nc-green)', fontWeight: 600 }}>
-                                    \u2192 Manage Claws
+                                    → Manage Claws
                                 </a>
                             )}
                             <div style={{
