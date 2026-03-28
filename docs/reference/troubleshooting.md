@@ -124,6 +124,8 @@ Common chat errors and their solutions:
 | "Authentication failed" | Invalid or missing API key | Go to Inference Config, re-enter your API key |
 | "Provider unreachable" | Inference endpoint is down or misconfigured | Check the provider URL in Inference Config, verify the service is running |
 | "Missing API key" | No key configured for the selected provider | Navigate to Inference Config and enter the key |
+| "OpenClaw agent is not available" | The sandbox image is missing the `openclaw` CLI, or a legacy false-positive plugin warning triggered a fallback | Rebuild the sandbox image, or ensure your dashboard is up-to-date. |
+| "Bypassed — not policy-constrained" | The agent request failed and the dashboard fell back to a direct LLM proxy without tool access | Rebuild the sandbox image to restore the full agent binary. |
 | SSH transport errors | Sandbox connectivity issues | Verify the sandbox is running via the Sandbox Manager |
 
 The chat interface shows actionable error messages with links to the relevant configuration page.
