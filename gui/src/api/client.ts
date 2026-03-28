@@ -196,7 +196,19 @@ export const api = {
         request<{ ok: boolean; claws: ClawInstance[] }>('/claws/sync', { method: 'POST' }),
     getClawGateways: () =>
         request<{ ok: boolean; gateways: { name: string; active: boolean }[] }>('/claws/gateways'),
+    getClawWorkspace: (id: string) =>
+        request<{ ok: boolean; files: WorkspaceFile[] }>(`/claws/${id}/workspace`),
+    updateClawWorkspaceFile: (id: string, file: string, content: string) =>
+        request<{ ok: boolean; message: string }>(`/claws/${id}/workspace/${file}`, {
+            method: 'PUT',
+            body: JSON.stringify({ content }),
+        }),
 };
+
+export interface WorkspaceFile {
+    name: string;
+    content: string;
+}
 
 export interface ClawInstance {
     id: string;
