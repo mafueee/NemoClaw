@@ -1,51 +1,31 @@
 {
-  "name": "nemoclaw",
-  "version": "0.1.0",
-  "description": "NemoClaw — run OpenClaw inside OpenShell with NVIDIA inference",
-  "license": "Apache-2.0",
+  "name": "openshell",
+  "version": "1.0.0",
+  "description": "OpenShell + NemoClaw Blueprint — safe, private runtime for autonomous AI agents with policy-enforced sandbox orchestration.",
+  "main": "index.js",
   "bin": {
-    "nemoclaw": "./bin/nemoclaw.js"
+    "openshell": "bin/manage-policies.js",
+    "nemoclaw": "bin/nemoclaw.js"
+  },
+  "directories": {
+    "doc": "docs",
+    "example": "examples"
   },
   "scripts": {
-    "test": "vitest run",
-    "prepare": "if [ -d .git ] && command -v prek >/dev/null 2>&1; then prek install; fi",
-    "prepublishOnly": "cd nemoclaw && env -u npm_config_global -u npm_config_prefix -u npm_config_omit npm install --ignore-scripts && ./node_modules/.bin/tsc"
-  },
-  "dependencies": {
-    "openclaw": "2026.3.11"
-  },
-  "files": [
-    "bin/",
-    "nemoclaw/dist/",
-    "nemoclaw/openclaw.plugin.json",
-    "nemoclaw/package.json",
-    "nemoclaw-blueprint/",
-    "scripts/",
-    "Dockerfile",
-    ".dockerignore"
-  ],
-  "engines": {
-    "node": ">=22.0.0"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/NVIDIA/NemoClaw.git"
+    "url": "git+https://github.com/NVIDIA/OpenShell.git"
   },
-  "devDependencies": {
-    "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
-    "@j178/prek": "^0.3.6",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-v8": "^4.1.0",
-    "jsdom": "^29.0.1",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.2",
-    "vitest": "^4.1.0"
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/NVIDIA/OpenShell/issues"
+  },
+  "homepage": "https://github.com/NVIDIA/OpenShell#readme",
+  "dependencies": {
+    "yaml": "^2.8.3"
   }
 }
