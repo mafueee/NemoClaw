@@ -10,7 +10,7 @@
     "credentialKey": "DISCORD_BOT_TOKEN",
     "credentialLabel": "Discord Bot Token",
     "installCommands": ["python3 -m pip install --quiet --break-system-packages discord.py 2>/dev/null || pip3 install --quiet --break-system-packages discord.py"],
-    "docs": "https://discord.com/developers/docs"
+    "docs": "https://discord.com/developers/docs. IMPORTANT: To send messages, you MUST use an exact destination ID (e.g. a numeric channel ID). DO NOT guess channel names like \"general\". If the user does not provide an exact ID, ask them for one before attempting to send."
   },
   {
     "id": "telegram",
@@ -23,7 +23,7 @@
     "credentialKey": "TELEGRAM_BOT_TOKEN",
     "credentialLabel": "Telegram Bot Token",
     "installCommands": ["python3 -m pip install --quiet --break-system-packages python-telegram-bot 2>/dev/null || pip3 install --quiet --break-system-packages python-telegram-bot"],
-    "docs": "https://core.telegram.org/bots/api"
+    "docs": "https://core.telegram.org/bots/api. IMPORTANT: To send messages, you MUST use an exact destination ID. DO NOT guess chat names. Ask the user for the exact ID if not provided."
   },
   {
     "id": "slack",
@@ -36,7 +36,7 @@
     "credentialKey": "SLACK_BOT_TOKEN",
     "credentialLabel": "Slack Bot Token",
     "installCommands": ["python3 -m pip install --quiet --break-system-packages slack-sdk 2>/dev/null || pip3 install --quiet --break-system-packages slack-sdk"],
-    "docs": "https://api.slack.com/docs"
+    "docs": "https://api.slack.com/docs. IMPORTANT: To send messages, you MUST use an exact destination ID. DO NOT guess channel names like \"general\". Ask the user for the exact ID if not provided."
   },
   {
     "id": "docker",
