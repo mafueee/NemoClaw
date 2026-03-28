@@ -153,7 +153,7 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
     // Step 1: Write a persistent env file inside the sandbox data volume.
     // Token is passed as argv[1] to Python to bypass all shell quoting hazards.
     const pyScript = [
-        'import os, sys',
+        'import os, sys, json',
         "env_dir = '/sandbox/.openclaw-data'",
         'os.makedirs(env_dir, exist_ok=True)',
         "env_file = os.path.join(env_dir, '.channel-env')",
@@ -161,6 +161,18 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
         'with open(env_file, "w") as f:',
         `    f.write("export ${envVar}=" + repr(tok) + "\\n")`,
         'os.chmod(env_file, 0o600)',
+        '',
+        '# Directly enable the channel in openclaw.json to bypass doctor CLI bugs',
+        "config_file = '/sandbox/.openclaw/openclaw.json'",
+        'if os.path.exists(config_file):',
+        '    try:',
+        '        with open(config_file, "r") as f: data = json.load(f)',
+        '        if "channels" not in data: data["channels"] = {}',
+        '        if "defaults" not in data["channels"]: data["channels"]["defaults"] = {}',
+        `        data["channels"]["defaults"]["${channelKey}"] = True`,
+        '        with open(config_file, "w") as f: json.dump(data, f, indent=2)',
+        '    except Exception as e: print("Config warning:", e)',
+        '',
         'print("ENV_WRITTEN")',
     ].join('\n');
 
@@ -207,9 +219,13 @@ async function configureChannelInSandbox(sandboxId, channelKey, token) {
         if (typeof grpcClient.updateConfig === 'function') {
             await grpcClient.updateConfig(sandboxId, {
                 settingKey: envVar,
-                settingValue: token,
+                settingValue: { stringValue: token },
             });
-            console.log(`[extensions] ${envVar} injected via gRPC updateConfig for sandbox ${sandboxId}`);
+            await grpcClient.updateConfig(sandboxId, {
+                settingKey: `channels.defaults.${channelKey}`,
+                settingValue: { boolValue: true },
+            });
+            console.log(`[extensions] ${envVar} and channel enabled via gRPC updateConfig for sandbox ${sandboxId}`);
             return {
                 ok: true,
                 message: `${envVar} injected into sandbox environment via gRPC — channel will be active on next agent invocation`,

@@ -235,12 +235,11 @@ NemoClaw includes a built-in **Extensions Catalog** for installing integrations 
 4. Click **Install** — NemoClaw will:
    - Apply the network policy preset (allowing sandbox egress to the service's API)
    - Prompt for credentials if required (optional — can be skipped)
-   - Write the bot token to `/sandbox/.openclaw-data/.channel-env` inside the sandbox via `ExecSandbox` — this persists across agent sessions and container restarts
-   - Restart the `openclaw gateway` daemon inside the sandbox so the new environment variables and channel configurations take effect immediately
+   - Securely inject the bot token into the daemon's environment and natively enable the channel via gRPC `UpdateConfig` calls — this persists across agent sessions.
    - Attempt to install packages via `ExecSandbox` — failures are reported as **advisory warnings** only; the extension is still considered installed if policy and credential steps succeed
 5. To remove an extension, click **Uninstall** — the network policy is removed.
 
-> **After install**: The `nemoclaw-start.sh` entrypoint automatically sources `/sandbox/.openclaw-data/.channel-env` on every container startup, so the bot token persists across container restarts. No manual reconfiguration needed.
+> **After install**: The configuration is persistently managed by the backend and synced via gRPC so the channel configuration remains active across restarts. No manual reconfiguration needed.
 
 ### Syncing an Already-Installed Extension
 
