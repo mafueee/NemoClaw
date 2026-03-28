@@ -2,96 +2,98 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# NemoClaw walkthrough — sandboxed agent approval flow.
-#
-# This sets up a split-screen workflow:
-#   LEFT:  OpenClaw agent (chat)
-#   RIGHT: OpenShell TUI (monitor + approve network egress)
-#
-# The agent runs inside a sandboxed environment with a controlled network
-# policy. When it tries to access a service not in the allow list,
-# the TUI prompts the operator to approve or deny the request.
-#
-# Prerequisites:
-#   - NemoClaw setup complete (./scripts/setup.sh)
-#   - NVIDIA_API_KEY in environment
-#
-# Suggested prompts that trigger the approval flow:
-#
-#   1. "Write a Python script that fetches the current NVIDIA stock price
-#       and prints it." → triggers PyPI (pip install) + finance API access
-#
-#   2. "Search the web for the latest MLPerf inference benchmarks and
-#       summarize them." → triggers web search API access
-#
-#   3. "Install the requests library and fetch the top story from
-#       Hacker News." → triggers PyPI + news.ycombinator.com access
-#
-# Usage:
-#   ./scripts/walkthrough.sh
-#
-# This opens two panes in tmux. If tmux is not available, run manually:
-#
-#   Terminal 1 (TUI):
-#     openshell term
-#
-#   Terminal 2 (Agent):
-#     openshell sandbox connect nemoclaw
-#     export NVIDIA_API_KEY=nvapi-...
-#     nemoclaw-start
-#     openclaw agent --agent main --local --session-id live
+# NemoClaw interactive walkthrough — launches a split tmux session with the
+# OpenShell TUI on the left and an agent session on the right.
 
 set -euo pipefail
 
-[ -n "${NVIDIA_API_KEY:-}" ] || {
-  echo "NVIDIA_API_KEY required"
-  exit 1
+SANDBOX_NAME="${1:-}"
+SESSION_NAME="nemoclaw-walkthrough"
+
+usage() {
+  cat <<'EOF'
+NemoClaw Interactive Walkthrough
+
+Launch a split tmux session to demonstrate the NemoClaw sandbox and policy
+enforcement architecture.
+
+Usage:
+  walkthrough.sh [sandbox-name]    Start the walkthrough
+  walkthrough.sh --help            Show this help
+
+Layout:
+  Left pane:  openshell term (TUI monitoring)
+  Right pane: Agent session inside sandbox
+
+Prerequisites:
+  - tmux installed
+  - OpenShell CLI on PATH
+  - A running NemoClaw sandbox
+EOF
 }
 
-echo ""
-echo "  ┌─────────────────────────────────────────────────────┐"
-echo "  │  NemoClaw Walkthrough                               │"
-echo "  │                                                     │"
-echo "  │  LEFT pane:   OpenShell TUI (monitor + approve)     │"
-echo "  │  RIGHT pane:  OpenClaw agent (chat)                 │"
-echo "  │                                                     │"
-echo "  │  When the agent tries to access a new service,      │"
-echo "  │  the TUI will prompt you to approve or deny.        │"
-echo "  │                                                     │"
-echo "  │  Try asking:                                        │"
-echo "  │    \"Fetch the current NVIDIA stock price\"            │"
-echo "  │    \"Install requests and get the top HN story\"       │"
-echo "  └─────────────────────────────────────────────────────┘"
-echo ""
+info() { echo "==> $*"; }
+err()  { echo "Error: $*" >&2; }
 
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "tmux not found. Run these in two separate terminals:"
-  echo ""
-  echo "  Terminal 1 (TUI):"
-  echo "    openshell term"
-  echo ""
-  echo "  Terminal 2 (Agent):"
-  echo "    openshell sandbox connect nemoclaw"
-  echo '    export NVIDIA_API_KEY=<your-key>'
-  echo "    nemoclaw-start"
-  echo "    openclaw agent --agent main --local --session-id live"
+if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+  usage
   exit 0
 fi
 
-SESSION="nemoclaw-walkthrough"
+if ! command -v tmux &>/dev/null; then
+  err "tmux is required for the walkthrough."
+  echo "  Install with: sudo apt install tmux"
+  exit 1
+fi
 
-# Kill old session if it exists
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+if ! command -v openshell &>/dev/null; then
+  err "OpenShell CLI not found on PATH."
+  echo "  Install OpenShell first: https://docs.nvidia.com/openshell/latest/"
+  exit 1
+fi
 
-# Create session with TUI on the left
-tmux new-session -d -s "$SESSION" -x 200 -y 50 "openshell term"
+if [[ -z "$SANDBOX_NAME" ]]; then
+  info "Detecting running sandboxes..."
+  SANDBOX_LIST=$(openshell sandbox list --json 2>/dev/null || echo "[]")
 
-# Split right pane for the agent
-tmux split-window -h -t "$SESSION" \
-  "openshell sandbox connect nemoclaw -- bash -c 'export NVIDIA_API_KEY=$NVIDIA_API_KEY && nemoclaw-start openclaw agent --agent main --local --session-id live'"
+  if command -v jq &>/dev/null; then
+    FIRST_SANDBOX=$(echo "$SANDBOX_LIST" | jq -r '.[0].name // empty' 2>/dev/null)
+  else
+    FIRST_SANDBOX=$(echo "$SANDBOX_LIST" | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"//')
+  fi
 
-# Even split
-tmux select-layout -t "$SESSION" even-horizontal
+  if [[ -z "$FIRST_SANDBOX" ]]; then
+    err "No running sandboxes found."
+    echo "  Create one with: nemoclaw onboard"
+    echo "  Or specify: ./scripts/walkthrough.sh <sandbox-name>"
+    exit 1
+  fi
 
-# Attach
-tmux attach -t "$SESSION"
+  SANDBOX_NAME="$FIRST_SANDBOX"
+  info "Using sandbox: ${SANDBOX_NAME}"
+fi
+
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  info "Killing existing walkthrough session..."
+  tmux kill-session -t "$SESSION_NAME"
+fi
+
+info "Starting NemoClaw walkthrough for sandbox '${SANDBOX_NAME}'..."
+echo ""
+echo "  NemoClaw Interactive Walkthrough"
+echo "  Left pane:  openshell term (TUI monitoring)"
+echo "  Right pane: Agent session inside sandbox"
+echo "  Ctrl+B, d to detach | tmux a -t ${SESSION_NAME} to re-attach"
+echo ""
+
+sleep 1
+
+tmux new-session -d -s "$SESSION_NAME" -x 200 -y 50 \
+  "openshell term"
+
+tmux split-window -h -t "$SESSION_NAME" \
+  "echo '  Connecting to sandbox: ${SANDBOX_NAME}'; echo ''; echo '  Try running commands to see the network policy in action:'; echo '  curl -sS https://api.github.com/zen'; echo '  curl -sS https://httpbin.org/get  # should be blocked'; echo ''; openshell sandbox connect ${SANDBOX_NAME}"
+
+tmux select-layout -t "$SESSION_NAME" even-horizontal
+
+tmux attach-session -t "$SESSION_NAME"
