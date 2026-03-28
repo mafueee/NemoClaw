@@ -523,3 +523,5 @@ The core sandbox security model — Landlock, seccomp, network namespace isolati
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
+## Workspace Configuration (Files Tab)
+Each Claw has an isolated workspace containing key identity and configuration files (`SOUL.md`, `IDENTITY.md`, `USER.md`). The NemoClaw dashboard now includes a "Files" tab in the Claw details view, allowing you to directly read and update these configuration files. Changes are instantly synchronized to the sandbox environment.
