@@ -199,13 +199,17 @@ const OnboardWizard = {
   },
 
   selectProvider(key) {
-    fetch('/api/inference/providers').then(r => r.json()).then(d => {
-      this.state.provider = d.providers.find(p => p.key === key);
-      document.querySelectorAll('.provider-card').forEach(c => {
-        c.classList.toggle('selected', c.dataset.key === key);
+    NemoClaw.api.get('/api/inference/providers')
+      .then(d => {
+        this.state.provider = d.providers.find(p => p.key === key);
+        document.querySelectorAll('.provider-card').forEach(c => {
+          c.classList.toggle('selected', c.dataset.key === key);
+        });
+        document.getElementById('step2-next').disabled = false;
+      })
+      .catch(err => {
+        NemoClaw.toast("Failed to load providers: " + err.message, "error");
       });
-      document.getElementById('step2-next').disabled = false;
-    });
   },
 
   async validateCreds() {

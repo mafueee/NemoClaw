@@ -165,10 +165,10 @@ const MonitorManager = {
     btn.textContent = '⏸ Stop'; 
     output.innerHTML = '';
     
-    this.logSource = new EventSource(`/api/sandboxes/${sandbox}/logs`);
+    this.logSource = NemoClaw.createAuthEventSource(`/api/sandboxes/${sandbox}/logs`);
     this.logSource.onmessage = (e) => {
       const d = JSON.parse(e.data);
-      output.innerHTML += `<div class="log-line"><span class="log-ts">${new Date(d.ts).toLocaleTimeString()}</span><span class="log-msg">${escapeHtml(d.line)}</span></div>`;
+      output.innerHTML += `<div class="log-line"><span class="log-ts">${new Date(d.ts).toLocaleTimeString()}</span><span class="log-msg">${NemoClaw.escapeHtml(d.line)}</span></div>`;
       output.scrollTop = output.scrollHeight;
     };
     this.logSource.onerror = () => { 
@@ -195,7 +195,7 @@ const MonitorManager = {
     btn.textContent = '⏸ Stop Streaming'; 
     tbody.innerHTML = '';
     
-    this.netSource = new EventSource(`/api/monitoring/${sandbox}/network`);
+    this.netSource = NemoClaw.createAuthEventSource(`/api/monitoring/${sandbox}/network`);
     this.netSource.onmessage = (e) => {
       const d = JSON.parse(e.data);
       let badgeClass = 'status-badge--stopped'; // Denied
@@ -204,10 +204,10 @@ const MonitorManager = {
 
       tbody.innerHTML += `
         <tr>
-          <td><div style="font-family:var(--nc-font-mono); font-size:var(--nc-text-sm);">${escapeHtml(d.destination)}</div></td>
+          <td><div style="font-family:var(--nc-font-mono); font-size:var(--nc-text-sm);">${NemoClaw.escapeHtml(d.destination)}</div></td>
           <td><span class="status-badge ${badgeClass}">${d.decision}</span></td>
           <td style="color:var(--nc-text-muted); font-size:var(--nc-text-sm);">${d.ts}</td>
-          <td><div style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--nc-font-mono); font-size:11px; color:var(--nc-text-muted);">${escapeHtml(d.raw)}</div></td>
+          <td><div style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--nc-font-mono); font-size:11px; color:var(--nc-text-muted);">${NemoClaw.escapeHtml(d.raw)}</div></td>
         </tr>
       `;
     };
@@ -226,8 +226,7 @@ const MonitorManager = {
     if (!sandbox) return;
 
     try {
-      const res = await fetch(`/api/monitoring/${sandbox}/approvals`);
-      const data = await res.json();
+      const data = await NemoClaw.api.get(`/api/monitoring/${sandbox}/approvals`);
       
       const emptyState = document.getElementById('mon-approval-empty');
       const table = document.getElementById('mon-approval-table');
@@ -241,8 +240,8 @@ const MonitorManager = {
         table.style.display = 'table';
         tbody.innerHTML = data.approvals.map(req => `
           <tr>
-            <td>${escapeHtml(req.destination)}</td>
-            <td>${escapeHtml(req.binary)}</td>
+            <td>${NemoClaw.escapeHtml(req.destination)}</td>
+            <td>${NemoClaw.escapeHtml(req.binary)}</td>
             <td>${req.ts}</td>
             <td><button class="btn btn-sm btn-primary">Approve</button> <button class="btn btn-sm btn-danger">Deny</button></td>
           </tr>
@@ -254,7 +253,4 @@ const MonitorManager = {
   }
 };
 
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+// escapeHtml is now provided by NemoClaw.escapeHtml — no local duplicate needed
