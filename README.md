@@ -230,18 +230,7 @@ The dashboard is accessible at `http://localhost:3000` (or your LAN IP).
 
 **Authentication:**
 
-The dashboard is protected by a bearer token. On first start, a random token is generated and displayed in the server logs:
-
-```
-[INFO] Token: abc123def456...
-```
-
-Use the token in one of three ways:
-1. **URL parameter:** `http://localhost:3000?token=abc123...` (stores in session)
-2. **HTTP header:** `Authorization: Bearer abc123...`
-3. **Environment variable:** Set `NEMOCLAW_DASHBOARD_TOKEN=your-token` before starting the server
-
-The token is persisted in `~/.nemoclaw/config.json` and reused across restarts.
+The dashboard authentication via bearer token is currently disabled. The dashboard interface can be accessed directly without providing a token.
 
 **Environment Variables:**
 
@@ -303,7 +292,7 @@ All GUI functions are also available as REST endpoints:
 | `/api/monitoring/:sandbox/approvals/:id/approve` | POST | Approve a blocked request |
 | `/api/monitoring/:sandbox/approvals/:id/deny` | POST | Deny a blocked request |
 
-**Authentication Note**: The dashboard is secured by a randomly generated bearer token. If you see an "Authentication Required" prompt upon loading the GUI, check the backend console output (`docker logs nemoclaw-gui`) to find your unique session token. When developing GUI components, always use `NemoClaw.api.get`/`post` in favor of raw `fetch()` to ensure authorization tokens are automatically appended.
+**Authentication Note**: The dashboard authentication is currently disabled. When developing GUI components, continue using `NemoClaw.api.get`/`post` in favor of raw `fetch()` to ensure future compatibility if token-based authorization is re-enabled.
 
 The `nemoclaw` CLI is the primary user-facing tool for sandbox lifecycle management.
 
