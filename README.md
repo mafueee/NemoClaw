@@ -228,6 +228,30 @@ cd gui && npm install && npm start
 
 The dashboard is accessible at `http://localhost:3000` (or your LAN IP).
 
+**Authentication:**
+
+The dashboard is protected by a bearer token. On first start, a random token is generated and displayed in the server logs:
+
+```
+[INFO] Token: abc123def456...
+```
+
+Use the token in one of three ways:
+1. **URL parameter:** `http://localhost:3000?token=abc123...` (stores in session)
+2. **HTTP header:** `Authorization: Bearer abc123...`
+3. **Environment variable:** Set `NEMOCLAW_DASHBOARD_TOKEN=your-token` before starting the server
+
+The token is persisted in `~/.nemoclaw/config.json` and reused across restarts.
+
+**Environment Variables:**
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `GUI_PORT` | Dashboard port | `3000` |
+| `NEMOCLAW_DASHBOARD_TOKEN` | Override dashboard auth token | Auto-generated |
+| `NEMOCLAW_CORS_ORIGIN` | Comma-separated CORS origins | Same-origin only |
+| `NEMOCLAW_LOG_LEVEL` | Log level (debug/info/warn/error) | `info` |
+
 **Dashboard Pages:**
 
 | Page | URL | Description |
@@ -252,27 +276,34 @@ All GUI functions are also available as REST endpoints:
 | `/api/sandboxes` | POST | Create a new sandbox |
 | `/api/sandboxes/:name` | GET | Sandbox detail with live status |
 | `/api/sandboxes/:name` | DELETE | Destroy a sandbox |
+| `/api/sandboxes/:name/start` | POST | Start a stopped sandbox |
+| `/api/sandboxes/:name/stop` | POST | Stop a running sandbox |
 | `/api/sandboxes/:name/logs` | GET (SSE) | Real-time log streaming |
+| `/api/health` | GET | Public health check (no auth required) |
 | `/api/policies/presets` | GET | List available policy presets |
 | `/api/policies/apply` | POST | Apply presets to a sandbox |
 | `/api/policies/baseline` | GET | Get full baseline policy |
 | `/api/policies/validate` | POST | Validate all policy files |
+| `/api/policies/custom` | POST | Apply raw YAML policy to a running sandbox |
+| `/api/policies/:sandbox/presets/:preset` | DELETE | Remove a specific preset from a sandbox |
+| `/api/policies/:sandbox/reset` | POST | Reset sandbox to baseline policy |
 | `/api/inference/providers` | GET | Provider catalogue |
 | `/api/inference/switch` | POST | Switch active inference provider |
 | `/api/inference/credentials` | GET/POST | Manage credential vault |
 | `/api/workspace/:sandbox/files` | GET | List workspace files |
 | `/api/workspace/:sandbox/backup` | POST | Create workspace backup |
 | `/api/system/preflight` | GET | Docker, OpenShell, port checks |
-| `/api/system/health` | GET | System health status |
-| `/api/system/telegram` | POST | Manage Telegram Bridge configurations (token + allowed chat IDs) |
-| `/api/system/services/start` | POST | Start auxiliary services (Telegram bridge + Cloudflared tunnel) |
+| `/api/system/telegram` | POST | Manage Telegram Bridge configurations |
+| `/api/system/services/start` | POST | Start auxiliary services |
 | `/api/system/services/stop` | POST | Stop all auxiliary services |
-| `/api/system/services/status` | GET | Auxiliary service health (Telegram, Cloudflared) |
-| `/api/policies/custom` | POST | Apply raw YAML policy to a running sandbox |
-| `/api/policies/:sandbox/presets/:preset` | DELETE | Remove a specific preset from a sandbox |
-| `/api/policies/:sandbox/reset` | POST | Reset sandbox to baseline policy |
-| `/api/chat/:sandbox` | POST | Stream chat message directly to sandboxed CLI agent |
-| `/api/monitoring/:sandbox/network`| GET (SSE) | Stream network intercepts and proxy logs |
+| `/api/system/services/status` | GET | Auxiliary service health |
+| `/api/chat/:sandbox` | POST | Chat with sandboxed agent |
+| `/api/monitoring/:sandbox/network` | GET (SSE) | Stream network intercepts |
+| `/api/monitoring/:sandbox/approvals` | GET | List blocked network requests |
+| `/api/monitoring/:sandbox/approvals/:id/approve` | POST | Approve a blocked request |
+| `/api/monitoring/:sandbox/approvals/:id/deny` | POST | Deny a blocked request |
+
+**Note**: When developing GUI components, always use `NemoClaw.api.get`/`post` in favor of raw `fetch()` to ensure authorization tokens are automatically appended.
 
 The `nemoclaw` CLI is the primary user-facing tool for sandbox lifecycle management.
 
