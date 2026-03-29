@@ -29,6 +29,8 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 app.use("/api/sandboxes", require("./routes/sandboxes"));
 app.use("/api/policies", require("./routes/policies"));
 app.use("/api/inference", require("./routes/inference"));
+app.use("/api/chat", require("./routes/chat"));
+app.use("/api/monitoring", require("./routes/monitoring"));
 app.use("/api/workspace", require("./routes/workspace"));
 app.use("/api/system", require("./routes/system"));
 

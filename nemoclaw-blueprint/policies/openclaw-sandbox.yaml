@@ -1,0 +1,216 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Baseline sandbox policy — deny-all with explicit endpoint allowlist.
+# Edit this file and re-run `nemoclaw onboard` to apply static changes,
+# or apply dynamically via `openshell policy set`.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+    - /sandbox/.openclaw            # Immutable gateway config — prevents agent
+                                    # from tampering with auth tokens or CORS.
+                                    # Writable state (agents, plugins) lives in
+                                    # /sandbox/.openclaw-data via symlinks.
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+    - /sandbox/.openclaw-data       # Writable agent/plugin state (symlinked from .openclaw)
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  claude_code:
+    name: claude_code
+    endpoints:
+      - host: api.anthropic.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: "*", path: "/**" }
+      - host: statsig.anthropic.com
+        port: 443
+        rules:
+          - allow: { method: "*", path: "/**" }
+      - host: sentry.io
+        port: 443
+        rules:
+          - allow: { method: "*", path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/claude }
+
+  nvidia:
+    name: nvidia
+    endpoints:
+      - host: integrate.api.nvidia.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: "*", path: "/**" }
+      - host: inference-api.nvidia.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: "*", path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/local/bin/openclaw }
+
+  github:
+    name: github
+    endpoints:
+      - host: github.com
+        port: 443
+        access: full
+    binaries:
+      - { path: /usr/bin/gh }
+      - { path: /usr/bin/git }
+
+  # ── GitHub REST API — method-restricted, gh CLI only ──────────────
+  # Separate from github (CONNECT tunnel for git push/pull) to enforce
+  # least-privilege. Only the gh CLI may call the REST API; git uses
+  # the CONNECT tunnel above. Ref: upstream NemoClaw network-policies docs.
+  github_rest_api:
+    name: github_rest_api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+          - allow: { method: PATCH, path: "/**" }
+          - allow: { method: PUT, path: "/**" }
+          - allow: { method: DELETE, path: "/**" }
+    binaries:
+      - { path: /usr/bin/gh }
+
+  # ── OpenClaw "phone home" ────────────────────────────────────────────
+  clawhub:
+    name: clawhub
+    endpoints:
+      - host: clawhub.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+
+  openclaw_api:
+    name: openclaw_api
+    endpoints:
+      - host: openclaw.ai
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+
+  openclaw_docs:
+    name: openclaw_docs
+    endpoints:
+      - host: docs.openclaw.ai
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+
+  npm_registry:
+    name: npm_registry
+    endpoints:
+      - host: registry.npmjs.org
+        port: 443
+        access: full
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/npm }
+
+  # ── Messaging — pre-allowed for OpenClaw agent channels ─────────────
+  telegram:
+    name: telegram
+    endpoints:
+      - host: api.telegram.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/bot*/**" }
+          - allow: { method: POST, path: "/bot*/**" }
+    binaries:
+      - { path: /usr/local/bin/node }
+
+  # ── Discord ──────────────────────────────────────────────────────────
+  # FIX: gateway.discord.gg uses `access: full` (CONNECT tunnel) instead
+  # of `protocol: rest`. The proxy's HTTP idle timeout (~2 min) kills
+  # long-lived WebSocket connections; a CONNECT tunnel avoids HTTP-level
+  # timeouts entirely. See NemoClaw #409.
+  discord:
+    name: discord
+    endpoints:
+      - host: discord.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+          - allow: { method: PUT, path: "/**" }
+          - allow: { method: PATCH, path: "/**" }
+          - allow: { method: DELETE, path: "/**" }
+      # WebSocket gateway — MUST use access: full (CONNECT tunnel)
+      - host: gateway.discord.gg
+        port: 443
+        access: full
+      - host: cdn.discordapp.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+      - host: media.discordapp.net
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/node }

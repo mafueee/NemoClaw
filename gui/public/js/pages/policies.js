@@ -1,5 +1,6 @@
 // ══════════════════════════════════════════════════════════════════
-// Policies Page — Visual policy editor with toggles and YAML preview
+// Policies Page — Visual policy editor with toggles, YAML editor,
+// preset removal, and baseline reset
 // ══════════════════════════════════════════════════════════════════
 
 NemoClaw.registerPage("policies", async () => {
@@ -34,6 +35,26 @@ NemoClaw.registerPage("policies", async () => {
     `<option value="${s.name}">${s.name}</option>`
   ).join("");
 
+  // Build applied presets for each sandbox
+  const sandboxPresetCards = sandboxes.sandboxes
+    .filter(s => (s.policies || []).length > 0)
+    .map(s => {
+      const presetBadges = s.policies.map(p => `
+        <span class="status-badge status-badge--info" style="display:inline-flex;align-items:center;gap:var(--nc-space-xs)">
+          ${presetIcons[p] || '🔌'} ${p}
+          <button class="btn-remove-preset" onclick="PolicyManager.removePreset('${s.name}', '${p}')" title="Remove preset">✕</button>
+        </span>
+      `).join(" ");
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--nc-space-sm) 0;border-bottom:1px solid var(--nc-glass-border)">
+          <div>
+            <span style="font-weight:var(--nc-weight-semibold);color:var(--nc-text-primary)">${s.name}</span>
+            <div style="margin-top:var(--nc-space-xs)">${presetBadges}</div>
+          </div>
+          <button class="btn btn-sm btn-ghost" onclick="PolicyManager.resetToBaseline('${s.name}')" title="Reset to baseline">↺ Reset</button>
+        </div>`;
+    }).join("");
+
   return `
     <div class="page-header animate-fade">
       <div>
@@ -46,6 +67,7 @@ NemoClaw.registerPage("policies", async () => {
     <div class="tab-bar">
       <button class="tab-btn active" onclick="PolicyManager.showTab('presets')">Presets</button>
       <button class="tab-btn" onclick="PolicyManager.showTab('baseline')">Baseline</button>
+      <button class="tab-btn" onclick="PolicyManager.showTab('custom')">Custom YAML</button>
       <button class="tab-btn" onclick="PolicyManager.showTab('merge')">Merge Preview</button>
     </div>
 
@@ -81,6 +103,13 @@ NemoClaw.registerPage("policies", async () => {
             <div id="apply-result" style="margin-top:var(--nc-space-md)"></div>
           </div>
 
+          ${sandboxPresetCards ? `
+          <div class="glass-card-flat" style="margin-top:var(--nc-space-lg)">
+            <h3 style="margin-bottom:var(--nc-space-md)">Applied Presets</h3>
+            <p style="color:var(--nc-text-secondary);font-size:var(--nc-text-xs);margin-bottom:var(--nc-space-sm)">Click ✕ to remove a preset or ↺ to reset to baseline.</p>
+            ${sandboxPresetCards || '<div style="color:var(--nc-text-muted);font-size:var(--nc-text-sm)">No presets applied to any sandbox</div>'}
+          </div>` : ''}
+
           <div class="glass-card-flat" style="margin-top:var(--nc-space-lg)">
             <h3 style="margin-bottom:var(--nc-space-md)">Preset Detail</h3>
             <div id="preset-detail" style="color:var(--nc-text-muted);font-size:var(--nc-text-sm)">
@@ -107,6 +136,44 @@ NemoClaw.registerPage("policies", async () => {
       </div>
     </div>
 
+    <!-- Custom YAML Tab -->
+    <div id="policy-tab-custom" style="display:none">
+      <div class="glass-card-flat">
+        <h3 style="margin-bottom:var(--nc-space-md)">Custom Policy Editor</h3>
+        <p style="color:var(--nc-text-secondary);font-size:var(--nc-text-sm);margin-bottom:var(--nc-space-lg)">
+          Write or paste a YAML policy file to apply directly to a running sandbox. This uses <code>openshell policy set</code> and the change takes effect immediately. Dynamic changes reset when the sandbox restarts.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Target Sandbox</label>
+          <select class="form-select" id="custom-policy-target">
+            <option value="">Select a sandbox...</option>
+            ${sandboxOptions}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Policy YAML</label>
+          <textarea class="form-input yaml-editor" id="custom-policy-yaml" rows="18" placeholder="network_policies:
+  my-custom-rule:
+    name: Custom Endpoints
+    endpoints:
+      - host: api.example.com
+        port: 443
+        protocol: rest
+        access: full
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/bin/python3"
+            spellcheck="false"
+          ></textarea>
+        </div>
+        <div style="display:flex;gap:var(--nc-space-md)">
+          <button class="btn btn-primary" onclick="PolicyManager.applyCustom()">🚀 Apply Custom Policy</button>
+          <button class="btn btn-secondary" onclick="PolicyManager.loadBaselineIntoEditor()">📋 Load Baseline Template</button>
+        </div>
+        <div id="custom-policy-result" style="margin-top:var(--nc-space-md)"></div>
+      </div>
+    </div>
+
     <!-- Merge Preview Tab -->
     <div id="policy-tab-merge" style="display:none">
       <div class="glass-card-flat">
@@ -125,12 +192,14 @@ const PolicyManager = {
   selectedPresets: new Set(),
 
   showTab(name) {
-    ['presets', 'baseline', 'merge'].forEach(t => {
+    ['presets', 'baseline', 'custom', 'merge'].forEach(t => {
       const el = document.getElementById(`policy-tab-${t}`);
       if (el) el.style.display = t === name ? 'block' : 'none';
     });
     document.querySelectorAll('.tab-bar .tab-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.textContent.toLowerCase().includes(name));
+      const btnText = btn.textContent.toLowerCase().replace(/\s+/g, '');
+      const tabLabel = name === 'custom' ? 'customyaml' : name === 'merge' ? 'mergepreview' : name;
+      btn.classList.toggle('active', btnText.includes(tabLabel) || btnText === name);
     });
   },
 
@@ -195,6 +264,77 @@ const PolicyManager = {
       if (d.success) NemoClaw.toast(`Policies applied to '${sandbox}'`, 'success');
     } catch (err) {
       result.innerHTML = `<span style="color:var(--nc-status-error)">✗ ${err.message}</span>`;
+    }
+  },
+
+  async applyCustom() {
+    const sandbox = document.getElementById('custom-policy-target').value;
+    const yaml = document.getElementById('custom-policy-yaml').value;
+    const result = document.getElementById('custom-policy-result');
+
+    if (!sandbox) {
+      NemoClaw.toast('Select a target sandbox first', 'warning');
+      return;
+    }
+    if (!yaml.trim()) {
+      NemoClaw.toast('Enter YAML policy content', 'warning');
+      return;
+    }
+
+    result.innerHTML = '<div class="loading-state"><div class="spinner spinner-sm"></div> Applying...</div>';
+
+    try {
+      const d = await NemoClaw.api.post('/api/policies/custom', { sandbox, yaml });
+      result.innerHTML = `<span style="color:var(--nc-status-running)">✓ ${d.message}</span>`;
+      NemoClaw.toast(`Custom policy applied to '${sandbox}'`, 'success');
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--nc-status-error)">✗ ${err.message}</span>`;
+      NemoClaw.toast('Failed to apply custom policy', 'error');
+    }
+  },
+
+  async loadBaselineIntoEditor() {
+    try {
+      const d = await NemoClaw.api.get('/api/policies/baseline');
+      const editor = document.getElementById('custom-policy-yaml');
+      if (editor && d.yaml) {
+        editor.value = d.yaml;
+        NemoClaw.toast('Baseline template loaded into editor', 'info');
+      }
+    } catch (err) {
+      NemoClaw.toast('Failed to load baseline', 'error');
+    }
+  },
+
+  async removePreset(sandbox, preset) {
+    if (!confirm(`Remove preset '${preset}' from sandbox '${sandbox}'?\n\nThis will recompute the policy from remaining presets.`)) return;
+
+    try {
+      const d = await NemoClaw.api.del(`/api/policies/${sandbox}/presets/${preset}`);
+      if (d.success) {
+        NemoClaw.toast(`Preset '${preset}' removed from '${sandbox}'`, 'success');
+        NemoClaw.route(); // refresh page
+      } else {
+        NemoClaw.toast('Failed to remove preset', 'error');
+      }
+    } catch (err) {
+      NemoClaw.toast(`Error: ${err.message}`, 'error');
+    }
+  },
+
+  async resetToBaseline(sandbox) {
+    if (!confirm(`Reset sandbox '${sandbox}' to baseline policy?\n\nAll preset policies will be removed.`)) return;
+
+    try {
+      const d = await NemoClaw.api.post(`/api/policies/${sandbox}/reset`);
+      if (d.success) {
+        NemoClaw.toast(`Sandbox '${sandbox}' reset to baseline policy`, 'success');
+        NemoClaw.route(); // refresh page
+      } else {
+        NemoClaw.toast('Failed to reset policy', 'error');
+      }
+    } catch (err) {
+      NemoClaw.toast(`Error: ${err.message}`, 'error');
     }
   },
 

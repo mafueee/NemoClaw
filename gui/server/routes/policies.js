@@ -220,4 +220,127 @@ router.post("/validate", (req, res) => {
   }
 });
 
+// ── POST /api/policies/custom — apply raw YAML policy ──────────────
+router.post("/custom", (req, res) => {
+  try {
+    const { sandbox, yaml: yamlContent } = req.body;
+    if (!sandbox || !yamlContent) {
+      return res
+        .status(400)
+        .json({ error: "sandbox and yaml content are required" });
+    }
+
+    // Validate YAML can be parsed
+    let parsed;
+    try {
+      parsed = policies.parseYaml(yamlContent);
+    } catch (parseErr) {
+      return res
+        .status(400)
+        .json({ error: `Invalid YAML: ${parseErr.message}` });
+    }
+
+    // Write to temp file and apply
+    const fs = require("fs");
+    const os = require("os");
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `nemoclaw-custom-${sandbox}-${Date.now()}.yaml`
+    );
+    fs.writeFileSync(tmpFile, yamlContent, { mode: 0o600 });
+
+    try {
+      const result = runCapture(
+        `openshell policy set ${sandbox} --file ${tmpFile}`,
+        { ignoreError: true }
+      );
+
+      const io = req.app.get("io");
+      if (io) io.to("status").emit("policy:custom-applied", { sandbox });
+
+      res.json({
+        success: true,
+        sandbox,
+        message: "Custom policy applied",
+        output: result || "",
+      });
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignored */ }
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/policies/:sandbox/presets/:preset — remove preset ───
+router.delete("/:sandbox/presets/:preset", (req, res) => {
+  try {
+    const { sandbox, preset } = req.params;
+
+    // Get current registry entry
+    const entry = registry.getSandbox(sandbox);
+    if (!entry) {
+      return res.status(404).json({ error: `Sandbox '${sandbox}' not found` });
+    }
+
+    const currentPresets = entry.policies || [];
+    if (!currentPresets.includes(preset)) {
+      return res.status(400).json({
+        error: `Preset '${preset}' is not applied to '${sandbox}'`,
+        applied: currentPresets,
+      });
+    }
+
+    // Remove the preset from the list
+    const remaining = currentPresets.filter((p) => p !== preset);
+
+    // Recompute merged policy from remaining presets
+    const baseline = policies.loadBaseline();
+    const merged = remaining.length > 0
+      ? policies.mergePresets(baseline, remaining)
+      : baseline;
+
+    // Apply the recomputed policy
+    const success = policies.applyPolicy(sandbox, merged);
+
+    if (success) {
+      registry.updateSandbox(sandbox, { policies: remaining });
+
+      const io = req.app.get("io");
+      if (io) io.to("status").emit("policy:removed", { sandbox, preset, remaining });
+    }
+
+    res.json({ success, sandbox, removed: preset, remaining });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/policies/:sandbox/reset — reset to baseline ──────────
+router.post("/:sandbox/reset", (req, res) => {
+  try {
+    const { sandbox } = req.params;
+
+    const entry = registry.getSandbox(sandbox);
+    if (!entry) {
+      return res.status(404).json({ error: `Sandbox '${sandbox}' not found` });
+    }
+
+    // Load and apply baseline only
+    const baseline = policies.loadBaseline();
+    const success = policies.applyPolicy(sandbox, baseline);
+
+    if (success) {
+      registry.updateSandbox(sandbox, { policies: [] });
+
+      const io = req.app.get("io");
+      if (io) io.to("status").emit("policy:reset", { sandbox });
+    }
+
+    res.json({ success, sandbox, message: "Reset to baseline policy" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

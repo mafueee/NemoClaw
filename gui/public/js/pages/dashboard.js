@@ -1,19 +1,27 @@
 // ══════════════════════════════════════════════════════════════════
-// Dashboard Page — Sandbox overview with live status cards
+// Dashboard Page — Sandbox overview with live status cards and
+// auxiliary service health
 // ══════════════════════════════════════════════════════════════════
 
 NemoClaw.registerPage("dashboard", async () => {
   let data = { sandboxes: [], unregistered: [], total: 0 };
   let system = { healthy: false, checks: {} };
   let version = {};
+  let serviceStatus = { services: { telegram: {}, cloudflared: {} } };
 
   try { data = await NemoClaw.api.get("/api/sandboxes"); } catch {}
   try { system = await NemoClaw.api.get("/api/system/preflight"); } catch {}
   try { version = await NemoClaw.api.get("/api/system/version"); } catch {}
+  try { serviceStatus = await NemoClaw.api.get("/api/system/services/status"); } catch {}
 
   const allSandboxes = [...data.sandboxes, ...data.unregistered];
   const running = allSandboxes.filter((s) => s.running).length;
   const stopped = allSandboxes.length - running;
+
+  const tgSvc = serviceStatus.services?.telegram || {};
+  const cfSvc = serviceStatus.services?.cloudflared || {};
+  const auxRunning = (tgSvc.running ? 1 : 0) + (cfSvc.running ? 1 : 0);
+  const auxTotal = 2;
 
   const sandboxCards = allSandboxes.length > 0
     ? allSandboxes.map((sb, i) => `
@@ -75,6 +83,29 @@ NemoClaw.registerPage("dashboard", async () => {
           Docker ${dockerStatus} &nbsp; OpenShell ${osStatus} &nbsp; Port ${portStatus}
         </div>
         <div class="stat-card__label">System Health</div>
+      </div>
+    </div>
+
+    <!-- Auxiliary Services Status -->
+    <div class="glass-card-flat animate-slide stagger-5" style="margin-top:var(--nc-space-lg);margin-bottom:var(--nc-space-lg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--nc-space-md)">
+        <h3>⚡ Auxiliary Services</h3>
+        <div style="display:flex;gap:var(--nc-space-md);align-items:center">
+          <span class="status-badge status-badge--${auxRunning > 0 ? 'running' : 'stopped'}">${auxRunning}/${auxTotal} active</span>
+          <a href="#/deploy" class="btn btn-sm btn-ghost" style="text-decoration:none">Manage →</a>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--nc-space-md)">
+        <div style="display:flex;align-items:center;gap:var(--nc-space-sm);padding:var(--nc-space-sm) var(--nc-space-md);border-radius:var(--nc-radius-md);background:var(--nc-surface-secondary)">
+          <span class="status-dot-inline ${tgSvc.running ? 'running' : 'stopped'}"></span>
+          <span style="font-size:var(--nc-text-sm)">✈️ Telegram Bridge</span>
+          <span style="margin-left:auto;font-size:var(--nc-text-xs);color:var(--nc-text-muted)">${tgSvc.running ? 'Active' : tgSvc.configured ? 'Configured' : 'Not configured'}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:var(--nc-space-sm);padding:var(--nc-space-sm) var(--nc-space-md);border-radius:var(--nc-radius-md);background:var(--nc-surface-secondary)">
+          <span class="status-dot-inline ${cfSvc.running ? 'running' : 'stopped'}"></span>
+          <span style="font-size:var(--nc-text-sm)">☁️ Cloudflared Tunnel</span>
+          <span style="margin-left:auto;font-size:var(--nc-text-xs);color:var(--nc-text-muted)">${cfSvc.running ? 'Active' : 'Inactive'}</span>
+        </div>
       </div>
     </div>
 

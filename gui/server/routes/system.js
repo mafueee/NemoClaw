@@ -150,4 +150,169 @@ router.post("/deploy", (req, res) => {
   }
 });
 
+// ──  POST /api/system/telegram — save Telegram integration ──────────
+router.post("/telegram", (req, res) => {
+  try {
+    const { token, sandbox, allowedChatIds } = req.body;
+    if (!token || !sandbox) {
+      return res.status(400).json({ error: "token and sandbox are required" });
+    }
+
+    const fs = require("fs");
+    const os = require("os");
+    const configDir = path.join(os.homedir(), ".nemoclaw");
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+
+    const configFile = path.join(configDir, "credentials.json");
+    let creds = {};
+    if (fs.existsSync(configFile)) {
+      try { creds = JSON.parse(fs.readFileSync(configFile, "utf8")); } catch(e) {}
+    }
+
+    if (!creds.telegram) creds.telegram = {};
+    creds.telegram[sandbox] = {
+      token,
+      allowedChatIds: allowedChatIds || [],
+      updatedAt: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(configFile, JSON.stringify(creds, null, 2));
+
+    res.json({ success: true, message: "Telegram bridge configured successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/system/services/start — start auxiliary services ──────
+router.post("/services/start", (req, res) => {
+  try {
+    const fs = require("fs");
+    const os = require("os");
+    const { spawn } = require("child_process");
+
+    // Load Telegram credentials
+    const configFile = path.join(os.homedir(), ".nemoclaw", "credentials.json");
+    let tgToken = "";
+    let allowedChatIds = "";
+    if (fs.existsSync(configFile)) {
+      try {
+        const creds = JSON.parse(fs.readFileSync(configFile, "utf8"));
+        if (creds.telegram) {
+          const sandboxName = Object.keys(creds.telegram)[0];
+          if (sandboxName) {
+            const tgConfig = creds.telegram[sandboxName];
+            tgToken = typeof tgConfig === "string" ? tgConfig : tgConfig.token || "";
+            allowedChatIds = Array.isArray(tgConfig.allowedChatIds)
+              ? tgConfig.allowedChatIds.join(",")
+              : "";
+          }
+        }
+      } catch { /* ignored */ }
+    }
+
+    const env = { ...process.env };
+    if (tgToken) env.TELEGRAM_BOT_TOKEN = tgToken;
+    if (allowedChatIds) env.ALLOWED_CHAT_IDS = allowedChatIds;
+
+    // Start auxiliary services via nemoclaw start
+    const ROOT = path.resolve(__dirname, "..", "..", "..");
+    const nemoclawBin = path.join(ROOT, "bin", "nemoclaw.js");
+
+    const proc = spawn("node", [nemoclawBin, "start"], {
+      env,
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+
+    let output = "";
+    proc.stdout.on("data", (data) => { output += data.toString(); });
+    proc.stderr.on("data", (data) => { output += data.toString(); });
+
+    proc.on("close", (code) => {
+      const io = req.app.get("io");
+      if (io) {
+        io.to("status").emit("services:started", { code, output: output.slice(-200) });
+      }
+    });
+
+    // Unref so the process doesn't keep the GUI event loop alive
+    proc.unref();
+
+    const io = req.app.get("io");
+    if (io) io.to("status").emit("services:starting", {});
+
+    res.json({ success: true, message: "Auxiliary services starting..." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/system/services/stop — stop auxiliary services ────────
+router.post("/services/stop", (req, res) => {
+  try {
+    const ROOT = path.resolve(__dirname, "..", "..", "..");
+    const nemoclawBin = path.join(ROOT, "bin", "nemoclaw.js");
+
+    const result = runCapture(`node ${nemoclawBin} stop`, {
+      ignoreError: true,
+      cwd: ROOT,
+    });
+
+    const io = req.app.get("io");
+    if (io) io.to("status").emit("services:stopped", {});
+
+    res.json({ success: true, message: "Auxiliary services stopped", output: result || "" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/system/services/status — auxiliary service health ──────
+router.get("/services/status", (req, res) => {
+  try {
+    const services = {
+      telegram: { running: false, details: "" },
+      cloudflared: { running: false, details: "" },
+    };
+
+    // Check for Telegram bridge process
+    try {
+      const tgResult = runCapture("pgrep -fa 'telegram.*bridge\\|TELEGRAM_BOT'", { ignoreError: true });
+      services.telegram.running = !!tgResult;
+      services.telegram.details = tgResult ? "Bridge process active" : "Not running";
+    } catch {
+      services.telegram.details = "Not running";
+    }
+
+    // Check for Cloudflared tunnel process
+    try {
+      const cfResult = runCapture("pgrep -f cloudflared", { ignoreError: true });
+      services.cloudflared.running = !!cfResult;
+      services.cloudflared.details = cfResult ? "Tunnel active" : "Not running";
+    } catch {
+      services.cloudflared.details = "Not running";
+    }
+
+    // Check for Telegram token in credentials
+    const fs = require("fs");
+    const os = require("os");
+    const configFile = path.join(os.homedir(), ".nemoclaw", "credentials.json");
+    let telegramConfigured = false;
+    if (fs.existsSync(configFile)) {
+      try {
+        const creds = JSON.parse(fs.readFileSync(configFile, "utf8"));
+        telegramConfigured = !!(creds.telegram && Object.keys(creds.telegram).length > 0);
+      } catch { /* ignored */ }
+    }
+
+    services.telegram.configured = telegramConfigured;
+
+    res.json({ services });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

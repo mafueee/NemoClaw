@@ -232,14 +232,15 @@ The dashboard is accessible at `http://localhost:3000` (or your LAN IP).
 
 | Page | URL | Description |
 | --- | --- | --- |
-| Dashboard | `#/` | Sandbox card grid with live status, system health stats |
+| Dashboard | `#/` | Sandbox card grid with live status, system health, auxiliary service status |
 | Onboard | `#/onboard` | 5-step wizard: preflight → provider → credentials → model → create |
 | Sandbox Detail | `#/sandbox/:name` | Status, logs, policy, workspace tabs for a single sandbox |
-| Policies | `#/policies` | Toggle preset grid, baseline viewer, merge preview, validation |
+| Policies | `#/policies` | Toggle presets, custom YAML editor, preset removal/reset, baseline viewer, merge preview |
 | Inference | `#/inference` | Provider catalogue, credential vault, switch active provider |
 | Workspace | `#/workspace` | Edit SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md |
 | Monitoring | `#/monitoring` | Live log streaming, network activity, operator approval queue |
-| Deploy | `#/deploy` | Remote GPU deployment, Telegram bridge configuration |
+| Deploy | `#/deploy` | Auxiliary services start/stop, remote GPU deploy, Telegram bridge with chat ID restriction |
+| Chat | `#/chat` | Interactive Chat Console to stream inferences securely inside the sandbox |
 
 **REST API:**
 
@@ -263,6 +264,15 @@ All GUI functions are also available as REST endpoints:
 | `/api/workspace/:sandbox/backup` | POST | Create workspace backup |
 | `/api/system/preflight` | GET | Docker, OpenShell, port checks |
 | `/api/system/health` | GET | System health status |
+| `/api/system/telegram` | POST | Manage Telegram Bridge configurations (token + allowed chat IDs) |
+| `/api/system/services/start` | POST | Start auxiliary services (Telegram bridge + Cloudflared tunnel) |
+| `/api/system/services/stop` | POST | Stop all auxiliary services |
+| `/api/system/services/status` | GET | Auxiliary service health (Telegram, Cloudflared) |
+| `/api/policies/custom` | POST | Apply raw YAML policy to a running sandbox |
+| `/api/policies/:sandbox/presets/:preset` | DELETE | Remove a specific preset from a sandbox |
+| `/api/policies/:sandbox/reset` | POST | Reset sandbox to baseline policy |
+| `/api/chat/:sandbox` | POST | Stream chat message directly to sandboxed CLI agent |
+| `/api/monitoring/:sandbox/network`| GET (SSE) | Stream network intercepts and proxy logs |
 
 The `nemoclaw` CLI is the primary user-facing tool for sandbox lifecycle management.
 

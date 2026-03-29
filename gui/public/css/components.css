@@ -736,3 +736,82 @@
   color: var(--nc-text-muted);
   margin-top: var(--nc-space-xs);
 }
+
+/* ── YAML Editor ─────────────────────────────────────────────── */
+.yaml-editor {
+  width: 100%;
+  min-height: 320px;
+  padding: var(--nc-space-md);
+  background: var(--nc-bg-primary);
+  border: var(--nc-border-thin);
+  border-radius: var(--nc-radius-md);
+  color: var(--nc-text-primary);
+  font-family: var(--nc-font-mono);
+  font-size: var(--nc-text-sm);
+  line-height: 1.7;
+  resize: vertical;
+  tab-size: 2;
+  transition: border-color var(--nc-duration-fast) var(--nc-ease);
+}
+
+.yaml-editor:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+  box-shadow: 0 0 0 3px var(--nc-accent-glow);
+}
+
+.yaml-editor::placeholder {
+  color: var(--nc-text-muted);
+  opacity: 0.6;
+}
+
+/* ── Remove Preset Button ────────────────────────────────────── */
+.btn-remove-preset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--nc-status-error);
+  font-size: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all var(--nc-duration-fast) var(--nc-ease);
+  padding: 0;
+  line-height: 1;
+}
+
+.btn-remove-preset:hover {
+  background: rgba(239, 68, 68, 0.4);
+  transform: scale(1.2);
+}
+
+/* ── Split Pane (ensure grid layout) ─────────────────────────── */
+.split-pane {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--nc-space-xl);
+}
+
+@media (max-width: 900px) {
+  .split-pane {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Section Header ──────────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--nc-space-lg);
+}
+
+.section-title {
+  font-size: var(--nc-text-lg);
+  font-weight: var(--nc-weight-semibold);
+}
+
