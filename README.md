@@ -303,7 +303,7 @@ All GUI functions are also available as REST endpoints:
 | `/api/monitoring/:sandbox/approvals/:id/approve` | POST | Approve a blocked request |
 | `/api/monitoring/:sandbox/approvals/:id/deny` | POST | Deny a blocked request |
 
-**Note**: When developing GUI components, always use `NemoClaw.api.get`/`post` in favor of raw `fetch()` to ensure authorization tokens are automatically appended.
+**Authentication Note**: The dashboard is secured by a randomly generated bearer token. If you see an "Authentication Required" prompt upon loading the GUI, check the backend console output (`docker logs nemoclaw-gui`) to find your unique session token. When developing GUI components, always use `NemoClaw.api.get`/`post` in favor of raw `fetch()` to ensure authorization tokens are automatically appended.
 
 The `nemoclaw` CLI is the primary user-facing tool for sandbox lifecycle management.
 
