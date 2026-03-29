@@ -8,6 +8,9 @@ const router = express.Router();
 const path = require("path");
 
 const LIB = path.resolve(__dirname, "..", "..", "..", "bin", "lib");
+const { createLogger } = require("../lib/logger");
+
+const log = createLogger("routes/inference");
 const {
   PROVIDERS,
   getCredential,
@@ -112,11 +115,11 @@ router.get("/credentials", (req, res) => {
 // ── POST /api/inference/credentials — store/update credential ──────
 router.post("/credentials", (req, res) => {
   try {
-    const { providerKey, apiKey } = req.body;
+    const { providerKey, apiKey, endpoint } = req.body;
     if (!providerKey || !apiKey) {
       return res.status(400).json({ error: "providerKey and apiKey are required" });
     }
-    setCredential(providerKey, apiKey);
+    setCredential(providerKey, apiKey, endpoint);
     res.json({ success: true, providerKey });
   } catch (err) {
     res.status(500).json({ error: err.message });

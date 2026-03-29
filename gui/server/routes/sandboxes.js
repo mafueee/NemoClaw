@@ -156,7 +156,7 @@ router.post("/", validateBodyFields("name"), (req, res) => {
     if (apiKey && provider) {
       try {
         const { setCredential } = require("../../../bin/lib/inference");
-        setCredential(provider, apiKey);
+        setCredential(provider, apiKey, endpoint);
       } catch (err) {
         log.warn("Failed to save credential", { error: err.message });
       }
