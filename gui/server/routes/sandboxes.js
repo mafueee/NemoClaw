@@ -1,60 +1,56 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
-// SPDX-License-Identifier: Apache-2.0
-//
-// Sandbox management API routes.
+// ══════════════════════════════════════════════════════════════════
+// Sandbox Management Routes
+// ══════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const { spawn } = require("child_process");
 const router = express.Router();
-const path = require("path");
+const registry = require("../../../bin/lib/registry");
+const { PROVIDERS, getCredential, setInference, getInferenceStatus } = require("../../../bin/lib/inference");
+const policies = require("../../../bin/lib/policies");
+const { run, runCapture } = require("../../../bin/lib/runner");
+const { validateParams, validateBodyFields } = require("../middleware/validate");
+const { createLogger } = require("../lib/logger");
 
-// Resolve bin/lib modules from project root
-const LIB = path.resolve(__dirname, "..", "..", "..", "bin", "lib");
-const registry = require(path.join(LIB, "registry"));
-const { PROVIDERS, getInferenceStatus } = require(path.join(LIB, "inference"));
-const policies = require(path.join(LIB, "policies"));
-const { runCapture, run } = require(path.join(LIB, "runner"));
+const log = createLogger("routes/sandboxes");
 
-// ── GET /api/sandboxes — list all registered sandboxes ─────────────
+// Track active SSE streams to prevent leaks
+const activeStreams = new Map();
+
+// ── List all sandboxes ─────────────────────────────────────────────
 router.get("/", (req, res) => {
   try {
     const { sandboxes, defaultSandbox } = registry.listSandboxes();
 
-    // Enrich with provider label
-    const enriched = sandboxes.map((sb) => ({
-      ...sb,
-      providerLabel: sb.provider
-        ? PROVIDERS[sb.provider]?.label || sb.provider
-        : "—",
-      isDefault: sb.name === defaultSandbox,
-    }));
-
-    // Try to get live status from OpenShell
-    let liveStatuses = [];
+    // Enrich with live data
+    let liveSandboxes = [];
     try {
       const result = runCapture("openshell sandbox list --json", {
         ignoreError: true,
       });
-      if (result) liveStatuses = JSON.parse(result);
-    } catch {
-      /* OpenShell not available */
+      if (result) liveSandboxes = JSON.parse(result);
+    } catch (err) {
+      log.warn("Failed to query live sandboxes", { error: err.message });
     }
 
-    // Merge live status
-    const merged = enriched.map((sb) => {
-      const live = liveStatuses.find(
+    const enriched = sandboxes.map((sb) => {
+      const live = liveSandboxes.find(
         (l) => (l.name || l.Name) === sb.name
       );
+      const providerInfo = PROVIDERS[sb.provider] || {};
       return {
         ...sb,
         running: !!live,
         phase: live?.phase || live?.Phase || null,
         image: live?.image || live?.Image || null,
+        providerLabel: providerInfo.label || sb.provider,
+        default: sb.name === defaultSandbox,
       };
     });
 
     // Find unregistered live sandboxes
     const registeredNames = sandboxes.map((s) => s.name);
-    const unregistered = liveStatuses
+    const unregistered = liveSandboxes
       .filter((l) => !registeredNames.includes(l.name || l.Name))
       .map((l) => ({
         name: l.name || l.Name,
@@ -65,188 +61,229 @@ router.get("/", (req, res) => {
       }));
 
     res.json({
-      sandboxes: merged,
+      sandboxes: enriched,
       unregistered,
-      defaultSandbox,
-      total: merged.length,
+      total: enriched.length + unregistered.length,
     });
   } catch (err) {
+    log.error("Failed to list sandboxes", { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/sandboxes/:name — sandbox detail ──────────────────────
-router.get("/:name", (req, res) => {
+// ── Get sandbox detail ─────────────────────────────────────────────
+router.get("/:name", validateParams("name"), (req, res) => {
   try {
-    const { name } = req.params;
-    const sb = registry.getSandbox(name);
+    const sb = registry.getSandbox(req.params.name);
+    if (!sb) return res.status(404).json({ error: "Sandbox not found" });
 
-    // Live status from OpenShell
-    let liveStatus = null;
+    // Enrich
+    let running = false;
     try {
       const result = runCapture("openshell sandbox list --json", {
         ignoreError: true,
       });
       if (result) {
-        const all = JSON.parse(result);
-        liveStatus = all.find((s) => (s.name || s.Name) === name);
+        const live = JSON.parse(result);
+        running = live.some(
+          (l) => (l.name || l.Name) === req.params.name
+        );
       }
-    } catch {
-      /* ignored */
+    } catch (err) {
+      log.warn("Failed to check sandbox status", { error: err.message });
     }
 
-    // Active policy
-    const activePolicy = policies.getCurrentPolicy(name);
-
-    // Inference status
+    const activePolicy = policies.getCurrentPolicy(req.params.name);
     const inference = getInferenceStatus();
+    const providerInfo = PROVIDERS[sb.provider] || {};
 
     res.json({
-      name,
-      registered: !!sb,
-      running: !!liveStatus,
-      provider: sb?.provider || null,
-      providerLabel: sb?.provider
-        ? PROVIDERS[sb.provider]?.label || sb.provider
-        : "—",
-      model: sb?.model || null,
-      policies: sb?.policies || [],
-      createdAt: sb?.createdAt || null,
-      live: liveStatus || null,
-      inference: inference || null,
+      ...sb,
+      running,
+      providerLabel: providerInfo.label || sb.provider,
+      activePolicy,
+      inference,
       policyGroupCount: activePolicy
         ? Object.keys(activePolicy.network_policies || {}).length
-        : null,
-      activePolicy: activePolicy || null,
+        : 0,
     });
   } catch (err) {
+    log.error("Failed to get sandbox detail", { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── POST /api/sandboxes — create sandbox (programmatic onboard) ────
-router.post("/", (req, res) => {
+// ── Create sandbox ─────────────────────────────────────────────────
+router.post("/", validateBodyFields("name"), (req, res) => {
+  const { name, provider, model, apiKey, endpoint } = req.body;
+  const io = req.app.get("io");
+
+  if (!name) return res.status(400).json({ error: "Name is required" });
+
   try {
-    const {
-      name,
-      provider: providerKey,
-      model,
-      apiKey,
-      endpoint,
-    } = req.body;
-
-    if (!name || !providerKey) {
-      return res
-        .status(400)
-        .json({ error: "name and provider are required" });
-    }
-
-    const provider = PROVIDERS[providerKey];
-    if (!provider) {
-      return res.status(400).json({ error: `Unknown provider: ${providerKey}` });
-    }
-
-    // Store credential if provided
-    if (apiKey) {
-      const { setCredential } = require(path.join(LIB, "inference"));
-      setCredential(providerKey, apiKey);
-    }
-
-    // Register in local registry
+    // Register
     registry.registerSandbox({
-      name: name.toLowerCase(),
-      model: model || provider.defaultModel,
-      provider: providerKey,
+      name,
+      model,
+      provider,
       policies: [],
       createdAt: new Date().toISOString(),
     });
 
-    // Attempt OpenShell sandbox creation
-    let openshellResult = { created: false, message: "" };
+    // Create via openshell
+    let openshellResult = null;
     try {
-      const createResult = run(
+      const result = run(
         `openshell sandbox create --name ${name} --from openclaw`,
         { ignoreError: true }
       );
-      if (createResult.status === 0) {
-        openshellResult.created = true;
-
-        // Apply baseline policy
-        const BLUEPRINT_DIR = path.resolve(
-          __dirname, "..", "..", "..", "nemoclaw-blueprint"
-        );
-        const BASELINE = path.join(
-          BLUEPRINT_DIR, "policies", "openclaw-sandbox.yaml"
-        );
-        run(
-          `openshell policy set ${name} --policy ${BASELINE} --wait`,
-          { ignoreError: true }
-        );
-
-        // Configure inference route
-        run(
-          `openshell inference set --provider ${provider.providerName} --model ${model || provider.defaultModel}`,
-          { ignoreError: true }
-        );
-        openshellResult.message = "Sandbox created with policy and inference configured";
-      } else {
-        openshellResult.message =
-          "OpenShell sandbox creation failed. Registered locally only.";
-      }
-    } catch {
-      openshellResult.message = "OpenShell CLI not available. Registered locally.";
+      openshellResult = {
+        success: result.status === 0,
+        message:
+          result.status === 0
+            ? "Sandbox created via OpenShell"
+            : "Registered locally (OpenShell unavailable)",
+      };
+    } catch (err) {
+      log.warn("OpenShell sandbox create failed", { error: err.message });
+      openshellResult = {
+        success: false,
+        message: "Registered locally",
+      };
     }
 
-    // Emit real-time update
-    const io = req.app.get("io");
-    if (io) io.to("status").emit("sandbox:created", { name });
+    // Save credential if provided
+    if (apiKey && provider) {
+      try {
+        const { setCredential } = require("../../../bin/lib/inference");
+        setCredential(provider, apiKey);
+      } catch (err) {
+        log.warn("Failed to save credential", { error: err.message });
+      }
+    }
+
+    // Configure the local inference gateway
+    if (provider) {
+      try {
+        const providerObj = PROVIDERS[provider];
+        if (providerObj) {
+          const finalModel = model || providerObj.defaultModel;
+          setInference(providerObj.providerName, finalModel);
+          log.info(`Inference configured to ${providerObj.providerName} / ${finalModel}`);
+        } else {
+          log.warn(`Unknown provider key: ${provider}, skipping inference set`);
+        }
+      } catch (err) {
+        log.warn("Failed to set inference configuration", { error: err.message });
+      }
+    }
+
+    log.info(`Sandbox '${name}' created`, { provider, model });
+    if (io) io.emit("sandbox:created", { name, provider, model });
 
     res.json({
-      success: true,
-      name: name.toLowerCase(),
+      name,
+      provider,
+      model,
       openshell: openshellResult,
     });
   } catch (err) {
+    log.error("Failed to create sandbox", { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── DELETE /api/sandboxes/:name — destroy sandbox ──────────────────
-router.delete("/:name", (req, res) => {
-  try {
-    const { name } = req.params;
+// ── Start sandbox ──────────────────────────────────────────────────
+router.post("/:name/start", validateParams("name"), (req, res) => {
+  const io = req.app.get("io");
+  const name = req.params.name;
 
-    // Destroy via OpenShell
-    let destroyed = false;
-    try {
-      const result = run(`openshell sandbox destroy ${name}`, {
-        ignoreError: true,
+  try {
+    const result = run(`openshell sandbox start ${name}`, {
+      ignoreError: true,
+    });
+
+    if (result.status === 0) {
+      log.info(`Sandbox '${name}' started`);
+      if (io) io.emit("sandbox:started", { name });
+      res.json({ success: true, message: `Sandbox '${name}' started` });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: "Failed to start sandbox. Is OpenShell available?",
       });
-      destroyed = result.status === 0;
-    } catch {
-      /* ignored */
     }
+  } catch (err) {
+    log.error("Failed to start sandbox", { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Stop sandbox ───────────────────────────────────────────────────
+router.post("/:name/stop", validateParams("name"), (req, res) => {
+  const io = req.app.get("io");
+  const name = req.params.name;
+
+  try {
+    const result = run(`openshell sandbox stop ${name}`, {
+      ignoreError: true,
+    });
+
+    if (result.status === 0) {
+      log.info(`Sandbox '${name}' stopped`);
+      if (io) io.emit("sandbox:stopped", { name });
+      res.json({ success: true, message: `Sandbox '${name}' stopped` });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: "Failed to stop sandbox",
+      });
+    }
+  } catch (err) {
+    log.error("Failed to stop sandbox", { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Destroy sandbox ────────────────────────────────────────────────
+router.delete("/:name", validateParams("name"), (req, res) => {
+  const io = req.app.get("io");
+  const name = req.params.name;
+
+  try {
+    // Destroy via openshell
+    run(`openshell sandbox destroy ${name}`, { ignoreError: true });
 
     // Remove from registry
     registry.removeSandbox(name);
 
-    // Emit real-time update
-    const io = req.app.get("io");
-    if (io) io.to("status").emit("sandbox:destroyed", { name });
+    log.info(`Sandbox '${name}' destroyed`);
+    if (io) io.emit("sandbox:destroyed", { name });
 
-    res.json({
-      success: true,
-      name,
-      openshellDestroyed: destroyed,
-    });
+    res.json({ success: true });
   } catch (err) {
+    log.error("Failed to destroy sandbox", { error: err.message });
+    // Still remove from registry
+    try {
+      registry.removeSandbox(name);
+    } catch (regErr) {
+      log.warn("Also failed to remove from registry", { error: regErr.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/sandboxes/:name/logs — SSE log stream ─────────────────
-router.get("/:name/logs", (req, res) => {
-  const { name } = req.params;
+// ── Stream logs (SSE) ──────────────────────────────────────────────
+router.get("/:name/logs", validateParams("name"), (req, res) => {
+  const name = req.params.name;
+
+  // Prevent duplicate streams for the same sandbox
+  const streamKey = `logs:${name}:${req.ip}`;
+  if (activeStreams.has(streamKey)) {
+    const prev = activeStreams.get(streamKey);
+    try { prev.kill(); } catch { /* already dead */ }
+    activeStreams.delete(streamKey);
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -254,42 +291,51 @@ router.get("/:name/logs", (req, res) => {
     Connection: "keep-alive",
   });
 
-  // Try to spawn log stream
-  const { spawn } = require("child_process");
-  let proc;
-  try {
-    proc = spawn("openshell", ["logs", name, "--tail"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    proc.stdout.on("data", (data) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.trim()) {
-          res.write(`data: ${JSON.stringify({ line, ts: Date.now() })}\n\n`);
-        }
-      }
-    });
-
-    proc.stderr.on("data", (data) => {
-      res.write(
-        `data: ${JSON.stringify({ line: `[stderr] ${data.toString().trim()}`, ts: Date.now() })}\n\n`
-      );
-    });
-
-    proc.on("close", () => {
-      res.write(`data: ${JSON.stringify({ line: "[stream ended]", ts: Date.now() })}\n\n`);
-      res.end();
-    });
-  } catch {
-    res.write(
-      `data: ${JSON.stringify({ line: "OpenShell CLI not available — cannot stream logs", ts: Date.now() })}\n\n`
-    );
-  }
-
-  req.on("close", () => {
-    if (proc) proc.kill();
+  const child = spawn("openshell", ["logs", name, "--tail"], {
+    stdio: ["ignore", "pipe", "pipe"],
   });
+
+  activeStreams.set(streamKey, child);
+
+  const sendLine = (line) => {
+    const trimmed = line.toString().trim();
+    if (trimmed) {
+      res.write(
+        `data: ${JSON.stringify({ line: trimmed, ts: Date.now() })}\n\n`
+      );
+    }
+  };
+
+  child.stdout.on("data", sendLine);
+  child.stderr.on("data", sendLine);
+
+  child.on("error", (err) => {
+    log.warn(`Log stream error for '${name}'`, { error: err.message });
+    res.write(`data: ${JSON.stringify({ line: `[Error: ${err.message}]`, ts: Date.now() })}\n\n`);
+    activeStreams.delete(streamKey);
+  });
+
+  child.on("close", () => {
+    activeStreams.delete(streamKey);
+    try { res.end(); } catch { /* client gone */ }
+  });
+
+  // Clean up when client disconnects (prevents memory leak)
+  req.on("close", () => {
+    log.debug(`Log stream client disconnected for '${name}'`);
+    activeStreams.delete(streamKey);
+    try { child.kill(); } catch { /* already dead */ }
+  });
+
+  // Safety timeout — max 30 minutes per stream
+  const timeout = setTimeout(() => {
+    log.info(`Log stream timeout for '${name}'`);
+    activeStreams.delete(streamKey);
+    try { child.kill(); } catch { /* ok */ }
+    try { res.end(); } catch { /* ok */ }
+  }, 30 * 60 * 1000);
+
+  req.on("close", () => clearTimeout(timeout));
 });
 
 module.exports = router;
