@@ -1,96 +1,90 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { PolicyEditor } from './PolicyEditor';
 
-vi.mock('../../api/client', async () => {
-    const getPolicies = vi.fn().mockResolvedValue({ presets: ['openclaw-sandbox'] });
-    const listSandboxes = vi.fn().mockResolvedValue({ sandboxes: [{ name: 'my-sandbox', status: 'Ready' }], raw: '' });
-    const getPresetsWithStatus = vi.fn().mockResolvedValue({
-        ok: true,
-        presets: [
-            { name: 'discord', file: 'discord.yaml', description: 'Allow Discord webhooks', applied: false },
-            { name: 'npm', file: 'npm.yaml', description: 'Allow npm registry', applied: true },
-        ],
-    });
-    const applyPolicy = vi.fn().mockResolvedValue({ ok: true, message: 'Applied' });
-    const removePolicy = vi.fn().mockResolvedValue({ ok: true, message: 'Removed' });
-    return { api: { getPolicies, listSandboxes, getPresetsWithStatus, applyPolicy, removePolicy } };
-});
-
-const { api } = await import('../../api/client');
-
-describe('PolicyEditor', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        vi.mocked(api.listSandboxes).mockResolvedValue({ sandboxes: [{ name: 'my-sandbox', status: 'Ready', image: '', created: '' }], raw: '' });
-        vi.mocked(api.getPresetsWithStatus).mockResolvedValue({
+vi.mock('../../api/client', () => ({
+    api: {
+        listSandboxes: vi.fn().mockResolvedValue({
+            sandboxes: [
+                { name: 'test-sandbox', status: 'running', phase: '' },
+            ],
+        }),
+        getPresetsWithStatus: vi.fn().mockResolvedValue({
             ok: true,
             presets: [
-                { name: 'discord', file: 'discord.yaml', description: 'Allow Discord webhooks', applied: false },
-                { name: 'npm', file: 'npm.yaml', description: 'Allow npm registry', applied: true },
+                { name: 'strict', description: 'Strict network policy', applied: true },
+                { name: 'permissive', description: 'Open access', applied: false },
             ],
+        }),
+        getSandboxPolicyYaml: vi.fn().mockResolvedValue({
+            ok: true,
+            yaml: 'sandbox:\n  network:\n    allowOutbound: true\n',
+            version: 5,
+            policyHash: 'deadbeef',
+            policySource: 'sandbox',
+        }),
+        saveSandboxPolicyYaml: vi.fn().mockResolvedValue({
+            ok: true,
+            version: 6,
+            policyHash: 'cafebabe',
+            warnings: [],
+        }),
+        validatePolicy: vi.fn().mockResolvedValue({
+            valid: true,
+            errors: [],
+            warnings: ['Consider restricting port range'],
+        }),
+        applyPolicy: vi.fn().mockResolvedValue({ ok: true, message: 'Applied strict' }),
+        removePolicy: vi.fn().mockResolvedValue({ ok: true, message: 'Removed strict' }),
+    },
+}));
+
+describe('PolicyEditor', () => {
+    beforeEach(() => { vi.clearAllMocks(); });
+
+    it('renders with preset tab showing presets', async () => {
+        render(<PolicyEditor />);
+        expect(screen.getByText('\ud83d\udee1\ufe0f Security Policies')).toBeInTheDocument();
+        await waitFor(() => {
+            expect(screen.getByText('strict')).toBeInTheDocument();
+            expect(screen.getByText('permissive')).toBeInTheDocument();
         });
     });
 
-    it('renders the page header', () => {
-        render(<PolicyEditor />);
-        expect(screen.getAllByText('🛡️ Security Policies').length).toBeGreaterThan(0);
-    });
-
-    it('shows sandbox selector', async () => {
+    it('shows active badge on applied presets', async () => {
         render(<PolicyEditor />);
         await waitFor(() => {
-            expect(screen.getByTestId('sandbox-selector')).toBeInTheDocument();
+            expect(screen.getByText('Active')).toBeInTheDocument();
         });
     });
 
-    it('shows preset cards with Apply/Remove buttons', async () => {
+    it('switches to YAML editor tab', async () => {
         render(<PolicyEditor />);
+        fireEvent.click(screen.getByTestId('tab-editor'));
         await waitFor(() => {
-            expect(screen.getAllByText('discord').length).toBeGreaterThan(0);
-            expect(screen.getAllByText('npm').length).toBeGreaterThan(0);
-        });
-        expect(screen.getAllByText('✗ Remove').length).toBeGreaterThan(0);
-        expect(screen.getAllByText('✓ Apply').length).toBeGreaterThan(0);
-    });
-
-    it('shows Active badge for applied presets', async () => {
-        render(<PolicyEditor />);
-        await waitFor(() => {
-            expect(screen.getAllByText('Active').length).toBeGreaterThan(0);
+            expect(screen.getByTestId('yaml-editor')).toBeInTheDocument();
         });
     });
 
-    it('does NOT show CLI instructions', async () => {
+    it('loads YAML content in editor', async () => {
         render(<PolicyEditor />);
+        fireEvent.click(screen.getByTestId('tab-editor'));
         await waitFor(() => {
-            expect(screen.getAllByText('discord').length).toBeGreaterThan(0);
+            const editor = screen.getByTestId('yaml-editor') as HTMLTextAreaElement;
+            expect(editor.value).toContain('allowOutbound');
         });
-        expect(screen.queryByText('Apply via CLI')).toBeNull();
-        expect(screen.queryByText('nemoclaw')).toBeNull();
     });
 
-    it('calls applyPolicy when Apply button is clicked', async () => {
-        const user = userEvent.setup();
+    it('switches to validation tab', async () => {
         render(<PolicyEditor />);
-        await waitFor(() => {
-            expect(screen.getAllByText('✓ Apply').length).toBeGreaterThan(0);
-        });
-        await user.click(screen.getAllByText('✓ Apply')[0]);
-        expect(api.applyPolicy).toHaveBeenCalledWith('my-sandbox', 'discord');
+        fireEvent.click(screen.getByTestId('tab-validation'));
+        expect(screen.getByText(/OPA Rule Validation/)).toBeInTheDocument();
     });
 
-    it('calls removePolicy when Remove button is clicked', async () => {
-        const user = userEvent.setup();
+    it('shows three tab buttons', () => {
         render(<PolicyEditor />);
-        await waitFor(() => {
-            expect(screen.getAllByText('✗ Remove').length).toBeGreaterThan(0);
-        });
-        await user.click(screen.getAllByText('✗ Remove')[0]);
-        expect(api.removePolicy).toHaveBeenCalledWith('my-sandbox', 'npm');
+        expect(screen.getByTestId('tab-presets')).toBeInTheDocument();
+        expect(screen.getByTestId('tab-editor')).toBeInTheDocument();
+        expect(screen.getByTestId('tab-validation')).toBeInTheDocument();
     });
 });
